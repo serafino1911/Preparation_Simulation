@@ -41,6 +41,12 @@ class DomainWindow:
         self.grid_step = tk.StringVar(value="1.0")
         self.grid_step_unit = tk.StringVar(value="km")
         
+        # Origine griglia
+        self.origin_lat = tk.DoubleVar(value=45.0)
+        self.origin_lon = tk.DoubleVar(value=9.0)
+        self.nx = tk.IntVar(value=100)
+        self.ny = tk.IntVar(value=100)
+        
         # Markers sulla mappa
         self.map_markers = {}
         self.map_polygons = []
@@ -49,6 +55,11 @@ class DomainWindow:
         self.updating_vertices = False
         
         self.setup_ui()
+        
+        # Aggiungi callback per aggiornare la mappa quando cambia l'origine
+        self.origin_lat.trace_add('write', lambda *args: self.window.after(100, self.update_map))
+        self.origin_lon.trace_add('write', lambda *args: self.window.after(100, self.update_map))
+        
         self.update_map()
     
     def setup_ui(self):
@@ -92,9 +103,31 @@ class DomainWindow:
         ttk.Entry(step_frame, textvariable=self.grid_step, width=15).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Combobox(step_frame, textvariable=self.grid_step_unit, values=['km', 'gradi'], state='readonly', width=10).pack(side=tk.LEFT)
         
+        # Separatore
+        ttk.Separator(controls_frame, orient='horizontal').grid(row=11, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        
+        # Origine Griglia
+        ttk.Label(controls_frame, text="Origine Griglia:", font=('Arial', 10, 'bold')).grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=(5, 2))
+        
+        # Latitudine origine
+        origin_frame1 = ttk.Frame(controls_frame)
+        origin_frame1.grid(row=13, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        ttk.Label(origin_frame1, text="Lat:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(origin_frame1, textvariable=self.origin_lat, width=15).pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Label(origin_frame1, text="Lon:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(origin_frame1, textvariable=self.origin_lon, width=15).pack(side=tk.LEFT)
+        
+        # NX e NY
+        origin_frame2 = ttk.Frame(controls_frame)
+        origin_frame2.grid(row=14, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        ttk.Label(origin_frame2, text="NX:").pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Entry(origin_frame2, textvariable=self.nx, width=15).pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Label(origin_frame2, text="NY:").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Entry(origin_frame2, textvariable=self.ny, width=15).pack(side=tk.LEFT)
+        
         # Bottoni azione
         button_frame = ttk.Frame(controls_frame)
-        button_frame.grid(row=11, column=0, columnspan=3, pady=20)
+        button_frame.grid(row=15, column=0, columnspan=3, pady=20)
         
         ttk.Button(button_frame, text="Salva", command=self.save_domain).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Annulla", command=self.window.destroy).pack(side=tk.LEFT, padx=5)
@@ -268,6 +301,19 @@ class DomainWindow:
                 )
                 self.map_markers[key] = marker
             
+            # Aggiungi il marker per l'origine griglia
+            try:
+                origin_marker = self.map_widget.set_marker(
+                    self.origin_lat.get(),
+                    self.origin_lon.get(),
+                    text=f"Origine Griglia\n{self.origin_lat.get():.4f}, {self.origin_lon.get():.4f}",
+                    marker_color_circle="green",
+                    marker_color_outside="darkgreen"
+                )
+                self.map_markers['origin'] = origin_marker
+            except tk.TclError:
+                pass  # Ignora errori se i valori non sono validi
+            
             # Disegna il rettangolo del dominio
             rectangle_coords = [
                 (self.vertices['NW']['lat'], self.vertices['NW']['lon']),
@@ -371,12 +417,25 @@ class DomainWindow:
                 'km_y': round(km_y, 3) if km_y is not None else None
             }
         
+        # Converti anche l'origine griglia in UTM
+        origin_lat = self.origin_lat.get()
+        origin_lon = self.origin_lon.get()
+        origin_zona, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon)
+        
         domain_data = {
             'zona_utm': zona_utm,
             'vertices': vertices_with_utm,
             'grid_step': {
                 'value': grid_step_value,
                 'unit': self.grid_step_unit.get()
+            },
+            'grid_origin': {
+                'lat': origin_lat,
+                'lon': origin_lon,
+                'km_x': round(origin_km_x, 3) if origin_km_x is not None else None,
+                'km_y': round(origin_km_y, 3) if origin_km_y is not None else None,
+                'nx': self.nx.get(),
+                'ny': self.ny.get()
             }
         }
         

@@ -74,8 +74,17 @@ class ConfiguratorApp:
         )
         temporal_btn.grid(row=3, column=0, pady=10)
         
+        # Bottone Configura CALMET
+        calmet_btn = ttk.Button(
+            main_frame,
+            text="Configura CALMET",
+            command=self.open_calmet_window,
+            width=30
+        )
+        calmet_btn.grid(row=4, column=0, pady=10)
+        
         # Separatore
-        ttk.Separator(main_frame, orient='horizontal').grid(row=4, column=0, sticky=(tk.W, tk.E), pady=15)
+        ttk.Separator(main_frame, orient='horizontal').grid(row=5, column=0, sticky=(tk.W, tk.E), pady=15)
         
         # Bottone Salva Configurazione
         save_config_btn = ttk.Button(
@@ -84,7 +93,7 @@ class ConfiguratorApp:
             command=self.save_configuration,
             width=30
         )
-        save_config_btn.grid(row=5, column=0, pady=10)
+        save_config_btn.grid(row=6, column=0, pady=10)
         
         # Bottone Carica Configurazione
         load_config_btn = ttk.Button(
@@ -93,7 +102,7 @@ class ConfiguratorApp:
             command=self.load_configuration,
             width=30
         )
-        load_config_btn.grid(row=6, column=0, pady=10)
+        load_config_btn.grid(row=7, column=0, pady=10)
 
         # Bottone Esci
         exit_btn = ttk.Button(
@@ -102,7 +111,7 @@ class ConfiguratorApp:
             command=self.root.quit,
             width=30
         )
-        exit_btn.grid(row=7, column=0, pady=10)
+        exit_btn.grid(row=8, column=0, pady=10)
         
         # Configura il grid
         self.root.columnconfigure(0, weight=1)
@@ -123,6 +132,11 @@ class ConfiguratorApp:
         """Apre la finestra per il dominio temporale"""
         from temporal_window import TemporalWindow
         TemporalWindow(self.root, self.temp_dir)
+    
+    def open_calmet_window(self):
+        """Apre la finestra per la configurazione CALMET"""
+        from calmet_window import CalmetWindow
+        CalmetWindow(self.root, self.temp_dir)
     
     def save_configuration(self):
         """Salva la configurazione corrente con un nome unico"""
