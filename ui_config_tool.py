@@ -5,12 +5,13 @@ Data: 2025-12-30
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import json
 import os
 from pathlib import Path
+from datetime import datetime
 
-Required_FOLDERS = ["Outputs", "temp_config"]
+Required_FOLDERS = ["Outputs", "temp_config", "saved_configurations"]
 
 class ConfiguratorApp:
     """Applicazione principale per la configurazione delle simulazioni"""
@@ -18,11 +19,16 @@ class ConfiguratorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Configuratore Simulazioni - PM_TEN")
-        self.root.geometry("400x300")
+        self.root.geometry("400x500")
         
         # Directory per i file temporanei
         self.temp_dir = Path("temp_config")
         self.temp_dir.mkdir(exist_ok=True)
+        
+        # Directory per le configurazioni salvate
+        self.saved_configs_dir = Path("saved_configurations")
+        self.saved_configs_dir.mkdir(exist_ok=True)
+        
         for folder in Required_FOLDERS:
             Path(folder).mkdir(exist_ok=True)
         self.setup_ui()
@@ -58,6 +64,36 @@ class ConfiguratorApp:
             width=30
         )
         orography_btn.grid(row=2, column=0, pady=10)
+        
+        # Bottone Dominio Temporale
+        temporal_btn = ttk.Button(
+            main_frame,
+            text="Dominio Temporale",
+            command=self.open_temporal_window,
+            width=30
+        )
+        temporal_btn.grid(row=3, column=0, pady=10)
+        
+        # Separatore
+        ttk.Separator(main_frame, orient='horizontal').grid(row=4, column=0, sticky=(tk.W, tk.E), pady=15)
+        
+        # Bottone Salva Configurazione
+        save_config_btn = ttk.Button(
+            main_frame,
+            text="💾 Salva Configurazione",
+            command=self.save_configuration,
+            width=30
+        )
+        save_config_btn.grid(row=5, column=0, pady=10)
+        
+        # Bottone Carica Configurazione
+        load_config_btn = ttk.Button(
+            main_frame,
+            text="📂 Carica Configurazione",
+            command=self.load_configuration,
+            width=30
+        )
+        load_config_btn.grid(row=6, column=0, pady=10)
 
         # Bottone Esci
         exit_btn = ttk.Button(
@@ -66,7 +102,7 @@ class ConfiguratorApp:
             command=self.root.quit,
             width=30
         )
-        exit_btn.grid(row=3, column=0, pady=10)
+        exit_btn.grid(row=7, column=0, pady=10)
         
         # Configura il grid
         self.root.columnconfigure(0, weight=1)
@@ -82,6 +118,215 @@ class ConfiguratorApp:
         """Apre la finestra per orografia e uso terreno"""
         from orography_window import OrographyWindow
         OrographyWindow(self.root, self.temp_dir)
+    
+    def open_temporal_window(self):
+        """Apre la finestra per il dominio temporale"""
+        from temporal_window import TemporalWindow
+        TemporalWindow(self.root, self.temp_dir)
+    
+    def save_configuration(self):
+        """Salva la configurazione corrente con un nome unico"""
+        # Chiedi il nome della configurazione
+        config_name = simpledialog.askstring(
+            "Salva Configurazione",
+            "Inserisci un nome per questa configurazione:",
+            parent=self.root
+        )
+        
+        if not config_name:
+            return
+        
+        # Rimuovi caratteri non validi dal nome
+        config_name = "".join(c for c in config_name if c.isalnum() or c in (' ', '_', '-')).strip()
+        
+        if not config_name:
+            messagebox.showerror("Errore", "Nome configurazione non valido!")
+            return
+        
+        # Crea timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder_name = f"{config_name}_{timestamp}"
+        config_folder = self.saved_configs_dir / folder_name
+        
+        try:
+            config_folder.mkdir(exist_ok=True)
+            
+            # Copia tutti i file dalla directory temp_config
+            files_copied = 0
+            for file in self.temp_dir.glob("*.json"):
+                destination = config_folder / file.name
+                with open(file, 'r', encoding='utf-8') as src:
+                    content = src.read()
+                with open(destination, 'w', encoding='utf-8') as dst:
+                    dst.write(content)
+                files_copied += 1
+            
+            # Salva anche i metadati della configurazione
+            metadata = {
+                'name': config_name,
+                'timestamp': timestamp,
+                'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'files_saved': files_copied
+            }
+            
+            metadata_file = config_folder / "metadata.json"
+            with open(metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=4, ensure_ascii=False)
+            
+            messagebox.showinfo(
+                "Successo",
+                f"Configurazione '{config_name}' salvata con successo!\n"
+                f"File salvati: {files_copied}\n"
+                f"Percorso: {config_folder}"
+            )
+        
+        except Exception as e:
+            messagebox.showerror(
+                "Errore",
+                f"Errore durante il salvataggio della configurazione:\n{str(e)}"
+            )
+    
+    def load_configuration(self):
+        """Carica una configurazione precedentemente salvata"""
+        # Ottieni lista delle configurazioni salvate
+        configs = []
+        for folder in self.saved_configs_dir.iterdir():
+            if folder.is_dir():
+                metadata_file = folder / "metadata.json"
+                if metadata_file.exists():
+                    try:
+                        with open(metadata_file, 'r', encoding='utf-8') as f:
+                            metadata = json.load(f)
+                        configs.append({
+                            'folder': folder,
+                            'name': metadata.get('name', folder.name),
+                            'date': metadata.get('date', 'N/A'),
+                            'display': f"{metadata.get('name', folder.name)} - {metadata.get('date', 'N/A')}"
+                        })
+                    except:
+                        # Se non c'è metadata, usa il nome della cartella
+                        configs.append({
+                            'folder': folder,
+                            'name': folder.name,
+                            'date': 'N/A',
+                            'display': folder.name
+                        })
+        
+        if not configs:
+            messagebox.showinfo(
+                "Info",
+                "Nessuna configurazione salvata trovata."
+            )
+            return
+        
+        # Crea finestra di selezione
+        selection_window = tk.Toplevel(self.root)
+        selection_window.title("Carica Configurazione")
+        selection_window.geometry("500x400")
+        selection_window.transient(self.root)
+        selection_window.grab_set()
+        
+        # Frame principale
+        main_frame = ttk.Frame(selection_window, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Label
+        ttk.Label(
+            main_frame,
+            text="Seleziona la configurazione da caricare:",
+            font=('Arial', 10, 'bold')
+        ).pack(pady=(0, 10))
+        
+        # Listbox con scrollbar
+        list_frame = ttk.Frame(main_frame)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        listbox = tk.Listbox(
+            list_frame,
+            yscrollcommand=scrollbar.set,
+            font=('Arial', 9)
+        )
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=listbox.yview)
+        
+        # Popola la listbox
+        for config in sorted(configs, key=lambda x: x['date'], reverse=True):
+            listbox.insert(tk.END, config['display'])
+        
+        selected_config = [None]
+        
+        def on_load():
+            selection = listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Attenzione", "Seleziona una configurazione!")
+                return
+            
+            selected_config[0] = configs[selection[0]]
+            selection_window.destroy()
+        
+        def on_delete():
+            selection = listbox.curselection()
+            if not selection:
+                messagebox.showwarning("Attenzione", "Seleziona una configurazione!")
+                return
+            
+            config_to_delete = configs[selection[0]]
+            
+            if messagebox.askyesno(
+                "Conferma",
+                f"Vuoi eliminare la configurazione '{config_to_delete['name']}'?\n"
+                "Questa operazione non può essere annullata."
+            ):
+                try:
+                    import shutil
+                    shutil.rmtree(config_to_delete['folder'])
+                    messagebox.showinfo("Successo", "Configurazione eliminata!")
+                    selection_window.destroy()
+                    self.load_configuration()  # Riapri la finestra
+                except Exception as e:
+                    messagebox.showerror("Errore", f"Errore durante l'eliminazione:\n{str(e)}")
+        
+        # Bottoni
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=10)
+        
+        ttk.Button(button_frame, text="Carica", command=on_load).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Elimina", command=on_delete).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Annulla", command=selection_window.destroy).pack(side=tk.LEFT, padx=5)
+        
+        # Aspetta che la finestra venga chiusa
+        self.root.wait_window(selection_window)
+        
+        # Se è stata selezionata una configurazione, caricala
+        if selected_config[0]:
+            try:
+                config_folder = selected_config[0]['folder']
+                
+                # Copia i file dalla configurazione salvata a temp_config
+                files_loaded = 0
+                for file in config_folder.glob("*.json"):
+                    if file.name != "metadata.json":
+                        destination = self.temp_dir / file.name
+                        with open(file, 'r', encoding='utf-8') as src:
+                            content = src.read()
+                        with open(destination, 'w', encoding='utf-8') as dst:
+                            dst.write(content)
+                        files_loaded += 1
+                
+                messagebox.showinfo(
+                    "Successo",
+                    f"Configurazione '{selected_config[0]['name']}' caricata con successo!\n"
+                    f"File caricati: {files_loaded}"
+                )
+            
+            except Exception as e:
+                messagebox.showerror(
+                    "Errore",
+                    f"Errore durante il caricamento della configurazione:\n{str(e)}"
+                )
 
 
 def main():
