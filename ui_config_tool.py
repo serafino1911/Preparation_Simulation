@@ -83,8 +83,17 @@ class ConfiguratorApp:
         )
         calmet_btn.grid(row=4, column=0, pady=10)
         
+        # Bottone Configura CALPUFF
+        calpuff_btn = ttk.Button(
+            main_frame,
+            text="Configura CALPUFF",
+            command=self.open_calpuff_window,
+            width=30
+        )
+        calpuff_btn.grid(row=5, column=0, pady=10)
+        
         # Separatore
-        ttk.Separator(main_frame, orient='horizontal').grid(row=5, column=0, sticky=(tk.W, tk.E), pady=15)
+        ttk.Separator(main_frame, orient='horizontal').grid(row=6, column=0, sticky=(tk.W, tk.E), pady=15)
         
         # Bottone Salva Configurazione
         save_config_btn = ttk.Button(
@@ -93,7 +102,7 @@ class ConfiguratorApp:
             command=self.save_configuration,
             width=30
         )
-        save_config_btn.grid(row=6, column=0, pady=10)
+        save_config_btn.grid(row=7, column=0, pady=10)
         
         # Bottone Carica Configurazione
         load_config_btn = ttk.Button(
@@ -102,7 +111,7 @@ class ConfiguratorApp:
             command=self.load_configuration,
             width=30
         )
-        load_config_btn.grid(row=7, column=0, pady=10)
+        load_config_btn.grid(row=8, column=0, pady=10)
 
         # Bottone Esci
         exit_btn = ttk.Button(
@@ -111,7 +120,7 @@ class ConfiguratorApp:
             command=self.root.quit,
             width=30
         )
-        exit_btn.grid(row=8, column=0, pady=10)
+        exit_btn.grid(row=9, column=0, pady=10)
         
         # Configura il grid
         self.root.columnconfigure(0, weight=1)
@@ -120,23 +129,28 @@ class ConfiguratorApp:
     
     def open_domain_window(self):
         """Apre la finestra per definire il dominio geografico"""
-        from domain_window import DomainWindow
+        from windows.domain_window import DomainWindow
         DomainWindow(self.root, self.temp_dir)
     
     def open_orography_window(self):
         """Apre la finestra per orografia e uso terreno"""
-        from orography_window import OrographyWindow
+        from windows.orography_window import OrographyWindow
         OrographyWindow(self.root, self.temp_dir)
     
     def open_temporal_window(self):
         """Apre la finestra per il dominio temporale"""
-        from temporal_window import TemporalWindow
+        from windows.temporal_window import TemporalWindow
         TemporalWindow(self.root, self.temp_dir)
     
     def open_calmet_window(self):
         """Apre la finestra per la configurazione CALMET"""
-        from calmet_window import CalmetWindow
+        from windows.calmet_window import CalmetWindow
         CalmetWindow(self.root, self.temp_dir)
+    
+    def open_calpuff_window(self):
+        """Apre la finestra per la configurazione CALPUFF"""
+        from windows.calpuff_window import CalpuffWindow
+        CalpuffWindow(self.root, self.temp_dir)
     
     def save_configuration(self):
         """Salva la configurazione corrente con un nome unico"""
