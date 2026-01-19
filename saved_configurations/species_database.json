@@ -1,0 +1,29 @@
+{
+    "NOX": {
+        "dry_deposition": 1,
+        "gas_inq": {
+            "diffus": ".1656",
+            "alfa": "1.0",
+            "react": "8.0",
+            "Mesophyll": "5.0",
+            "Henry_coef": "3.5"
+        },
+        "dry_inq": null,
+        "wet_inq": {
+            "Liq_Prec": "3.0E-05",
+            "Froz_Prec": "3.0E-05"
+        }
+    },
+    "PM10": {
+        "dry_deposition": 2,
+        "gas_inq": null,
+        "dry_inq": {
+            "Geo_mass_mean_diam": "4.8",
+            "Geo_std_dev": "2"
+        },
+        "wet_inq": {
+            "Liq_Prec": "1.0E-04",
+            "Froz_Prec": "1.0E-04"
+        }
+    }
+}

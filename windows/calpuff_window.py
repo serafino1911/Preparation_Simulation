@@ -163,7 +163,7 @@ class CalpuffWindow:
         ttk.Combobox(base_frame, textvariable=self.ioutu, 
                     values=[1, 2, 3], state='readonly', width=13).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=5)
         
-        ttk.Label(base_frame, text="IPRTU (Precisione):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(base_frame, text="IPRTU (Altre unità Output):").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Combobox(base_frame, textvariable=self.iprtu, 
                     values=[1, 2, 3, 4, 5, 6, 7, 8], state='readonly', width=13).grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
         
@@ -334,7 +334,8 @@ class CalpuffWindow:
     
     def configure_species(self):
         """Apre finestra per configurare le species"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.species_window import SpeciesWindow
+        SpeciesWindow(self.window, self.temp_dir)
     
     def configure_point_emissions(self):
         """Apre finestra per configurare emissioni puntuali"""
