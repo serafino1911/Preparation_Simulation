@@ -16,7 +16,7 @@ class CalpuffWindow:
         self.temp_dir = temp_dir
         self.window = tk.Toplevel(parent)
         self.window.title("Configurazione CALPUFF")
-        self.window.geometry("900x750")
+        self.window.geometry("650x750")
         
         # Variabili di configurazione base
         self.num_periods = tk.IntVar(value=24)

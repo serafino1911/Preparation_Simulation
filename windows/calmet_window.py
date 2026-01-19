@@ -16,7 +16,7 @@ class CalmetWindow:
         self.temp_dir = temp_dir
         self.window = tk.Toplevel(parent)
         self.window.title("Configurazione CALMET")
-        self.window.geometry("800x700")
+        self.window.geometry("650x700")
         
         # Variabili di configurazione
         self.start_date = tk.StringVar(value="2024-01-01")

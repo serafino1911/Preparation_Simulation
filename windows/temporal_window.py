@@ -23,7 +23,7 @@ class TemporalWindow:
         self.temp_dir = temp_dir
         self.window = tk.Toplevel(parent)
         self.window.title("Definisci Dominio Temporale")
-        self.window.geometry("600x650")
+        self.window.geometry("600x580")
         
         # Variabili
         self.start_date = tk.StringVar()
