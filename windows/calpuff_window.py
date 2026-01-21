@@ -24,12 +24,10 @@ class CalpuffWindow:
         self.iprtu = tk.IntVar(value=3)
         
         # Emissioni puntuali
-        self.npt1 = tk.IntVar(value=0)
         self.iptu = tk.IntVar(value=1)
         self.npt2 = tk.IntVar(value=0)
         
         # Emissioni areali
-        self.nar1 = tk.IntVar(value=0)
         self.iaru = tk.IntVar(value=1)
         self.nar2 = tk.IntVar(value=0)
         
@@ -79,12 +77,10 @@ class CalpuffWindow:
                 self.iprtu.set(data.get('iprtu', 3))
                 
                 # Point emissions
-                self.npt1.set(data.get('npt1', 0))
                 self.iptu.set(data.get('iptu', 1))
                 self.npt2.set(data.get('npt2', 0))
                 
                 # Area emissions
-                self.nar1.set(data.get('nar1', 0))
                 self.iaru.set(data.get('iaru', 1))
                 self.nar2.set(data.get('nar2', 0))
                 
@@ -186,9 +182,6 @@ class CalpuffWindow:
         point_frame.columnconfigure(5, weight=1)
         row += 1
         
-        ttk.Label(point_frame, text="NPT1:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(point_frame, textvariable=self.npt1, width=10).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
-        
         ttk.Label(point_frame, text="IPTU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
         ttk.Combobox(point_frame, textvariable=self.iptu, values=[1,2,3,4,5,6,7,8,9], 
                     state='readonly', width=8).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
@@ -206,9 +199,6 @@ class CalpuffWindow:
         area_frame.columnconfigure(3, weight=1)
         area_frame.columnconfigure(5, weight=1)
         row += 1
-        
-        ttk.Label(area_frame, text="NAR1:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(area_frame, textvariable=self.nar1, width=10).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
         
         ttk.Label(area_frame, text="IARU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
         ttk.Combobox(area_frame, textvariable=self.iaru, values=[1,2,3,4,5,6,7,8,9], 
@@ -339,11 +329,13 @@ class CalpuffWindow:
     
     def configure_point_emissions(self):
         """Apre finestra per configurare emissioni puntuali"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.point_sources_window import PointSourcesWindow
+        PointSourcesWindow(self.window, self.temp_dir)
     
     def configure_area_emissions(self):
         """Apre finestra per configurare emissioni areali"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.area_sources_window import AreaSourcesWindow
+        AreaSourcesWindow(self.window, self.temp_dir)
     
     def configure_volume_emissions(self):
         """Apre finestra per configurare emissioni volumetriche"""
@@ -367,54 +359,62 @@ class CalpuffWindow:
     
     def save_config(self):
         """Salva la configurazione CALPUFF"""
-        config_data = {
-            # Base config
-            'num_periods': self.num_periods.get(),
-            'ioutu': self.ioutu.get(),
-            'iprtu': self.iprtu.get(),
-            
-            # Point emissions
-            'npt1': self.npt1.get(),
-            'iptu': self.iptu.get(),
-            'npt2': self.npt2.get(),
-            
-            # Area emissions
-            'nar1': self.nar1.get(),
-            'iaru': self.iaru.get(),
-            'nar2': self.nar2.get(),
-            
-            # Volume emissions
-            'nvl1': self.nvl1.get(),
-            'ivlu': self.ivlu.get(),
-            'nvl2': self.nvl2.get(),
-            
-            # Flare emissions
-            'nfl2': self.nfl2.get(),
-            
-            # Road emissions
-            'nrd1': self.nrd1.get(),
-            'irdu': self.irdu.get(),
-            'nrd2': self.nrd2.get(),
-            
-            # Line emissions
-            'nln2': self.nln2.get(),
-            'nlines': self.nlines.get(),
-            'ilnu': self.ilnu.get(),
-            'mxnseg': self.mxnseg.get(),
-            'nlrise': self.nlrise.get(),
-            'xl': self.xl.get(),
-            'hbl': self.hbl.get(),
-            'wbl': self.wbl.get(),
-            'dxl': self.dxl.get(),
-            'fprimel': self.fprimel.get(),
-            'wml': self.wml.get(),
-            
-            # Scaling factors
-            'tabella': self.tabella.get()
-        }
-        
         try:
             config_file = self.temp_dir / 'calpuff_config.json'
+            
+            # Carica la configurazione esistente se presente
+            if config_file.exists():
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+            else:
+                config_data = {}
+            
+            # Aggiorna solo i campi di questa finestra, mantenendo il resto
+            config_data.update({
+                # Base config
+                'num_periods': self.num_periods.get(),
+                'ioutu': self.ioutu.get(),
+                'iprtu': self.iprtu.get(),
+                
+                # Point emissions
+                'iptu': self.iptu.get(),
+                'npt2': self.npt2.get(),
+                
+                # Area emissions
+                'iaru': self.iaru.get(),
+                'nar2': self.nar2.get(),
+                
+                # Volume emissions
+                'nvl1': self.nvl1.get(),
+                'ivlu': self.ivlu.get(),
+                'nvl2': self.nvl2.get(),
+                
+                # Flare emissions
+                'nfl2': self.nfl2.get(),
+                
+                # Road emissions
+                'nrd1': self.nrd1.get(),
+                'irdu': self.irdu.get(),
+                'nrd2': self.nrd2.get(),
+                
+                # Line emissions
+                'nln2': self.nln2.get(),
+                'nlines': self.nlines.get(),
+                'ilnu': self.ilnu.get(),
+                'mxnseg': self.mxnseg.get(),
+                'nlrise': self.nlrise.get(),
+                'xl': self.xl.get(),
+                'hbl': self.hbl.get(),
+                'wbl': self.wbl.get(),
+                'dxl': self.dxl.get(),
+                'fprimel': self.fprimel.get(),
+                'wml': self.wml.get(),
+                
+                # Scaling factors
+                'tabella': self.tabella.get()
+            })
+            
+            # Salva il file aggiornato
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
             
