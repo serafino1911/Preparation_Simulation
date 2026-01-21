@@ -32,7 +32,6 @@ class CalpuffWindow:
         self.nar2 = tk.IntVar(value=0)
         
         # Emissioni volumetriche
-        self.nvl1 = tk.IntVar(value=0)
         self.ivlu = tk.IntVar(value=1)
         self.nvl2 = tk.IntVar(value=0)
         
@@ -85,7 +84,6 @@ class CalpuffWindow:
                 self.nar2.set(data.get('nar2', 0))
                 
                 # Volume emissions
-                self.nvl1.set(data.get('nvl1', 0))
                 self.ivlu.set(data.get('ivlu', 1))
                 self.nvl2.set(data.get('nvl2', 0))
                 
@@ -218,9 +216,6 @@ class CalpuffWindow:
         volume_frame.columnconfigure(5, weight=1)
         row += 1
         
-        ttk.Label(volume_frame, text="NVL1:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(volume_frame, textvariable=self.nvl1, width=10).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
-        
         ttk.Label(volume_frame, text="IVLU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
         ttk.Combobox(volume_frame, textvariable=self.ivlu, values=[1,2,3,4,5,6,7,8,9], 
                     state='readonly', width=8).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
@@ -339,7 +334,8 @@ class CalpuffWindow:
     
     def configure_volume_emissions(self):
         """Apre finestra per configurare emissioni volumetriche"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.volume_sources_window import VolumeSourcesWindow
+        VolumeSourcesWindow(self.window, self.temp_dir)
     
     def configure_flare_emissions(self):
         """Apre finestra per configurare emissioni flare"""
@@ -385,7 +381,6 @@ class CalpuffWindow:
                 'nar2': self.nar2.get(),
                 
                 # Volume emissions
-                'nvl1': self.nvl1.get(),
                 'ivlu': self.ivlu.get(),
                 'nvl2': self.nvl2.get(),
                 

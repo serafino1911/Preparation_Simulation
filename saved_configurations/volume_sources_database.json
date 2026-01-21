@@ -1,0 +1,16 @@
+{
+    "VOl2": {
+        "source_name": "VOl2",
+        "position": [
+            518.29,
+            5004.012
+        ],
+        "height": 9.0,
+        "base_elev": 0.0,
+        "initial_sigma_z": 7.0,
+        "initial_sigma_y": 10.0,
+        "emis_rates": [
+            123.0
+        ]
+    }
+}
