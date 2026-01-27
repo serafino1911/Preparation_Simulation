@@ -226,30 +226,38 @@ class CalpuffWindow:
         ttk.Button(volume_frame, text="⚙️ Configura Sorgenti Volumetriche", 
                   command=self.configure_volume_emissions).grid(row=1, column=0, columnspan=6, pady=10)
         
-        # === SEZIONE EMISSIONI FLARE/STRADALI ===
-        other_frame = ttk.LabelFrame(scrollable_frame, text="Altre Emissioni", padding="10")
-        other_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=5, padx=5)
-        other_frame.columnconfigure(1, weight=1)
-        other_frame.columnconfigure(3, weight=1)
+        # === SEZIONE EMISSIONI FLARE ===
+        flare_frame = ttk.LabelFrame(scrollable_frame, text="Emissioni Flare", padding="10")
+        flare_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=5, padx=5)
+        flare_frame.columnconfigure(1, weight=1)
         row += 1
         
-        # Flare
-        ttk.Label(other_frame, text="Flare (NFL2):").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(other_frame, textvariable=self.nfl2, width=15).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
-        ttk.Button(other_frame, text="⚙️ Configura Flare", 
-                  command=self.configure_flare_emissions, width=20).grid(row=0, column=2, columnspan=2, pady=5, padx=10)
+        ttk.Label(flare_frame, text="NFL2 (File Ext):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(flare_frame, textvariable=self.nfl2, width=15).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
         
-        # Road
-        ttk.Label(other_frame, text="Strade (NRD1):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(other_frame, textvariable=self.nrd1, width=10).grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 5))
-        ttk.Label(other_frame, text="IRDU:").grid(row=1, column=2, sticky=tk.W, pady=5, padx=(10, 0))
-        ttk.Combobox(other_frame, textvariable=self.irdu, values=[1,2,3,4,5,6,7,8,9], 
-                    state='readonly', width=8).grid(row=1, column=3, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ttk.Button(flare_frame, text="⚙️ Configura Sorgenti Flare", 
+                  command=self.configure_flare_emissions).grid(row=1, column=0, columnspan=2, pady=10)
         
-        ttk.Label(other_frame, text="NRD2 (File Ext):").grid(row=2, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(other_frame, textvariable=self.nrd2, width=15).grid(row=2, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
-        ttk.Button(other_frame, text="⚙️ Configura Sorgenti Stradali", 
-                  command=self.configure_road_emissions, width=20).grid(row=2, column=2, columnspan=2, pady=5, padx=10)
+        # === SEZIONE EMISSIONI STRADALI ===
+        road_frame = ttk.LabelFrame(scrollable_frame, text="Emissioni Stradali", padding="10")
+        road_frame.grid(row=row, column=0, sticky=(tk.W, tk.E), pady=5, padx=5)
+        road_frame.columnconfigure(1, weight=1)
+        road_frame.columnconfigure(3, weight=1)
+        road_frame.columnconfigure(5, weight=1)
+        row += 1
+        
+        ttk.Label(road_frame, text="NRD1:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(road_frame, textvariable=self.nrd1, width=10).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        
+        ttk.Label(road_frame, text="IRDU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
+        ttk.Combobox(road_frame, textvariable=self.irdu, values=[1,2,3,4,5,6,7,8,9], 
+                    state='readonly', width=8).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        
+        ttk.Label(road_frame, text="NRD2 (File Ext):").grid(row=0, column=4, sticky=tk.W, pady=5, padx=(10, 0))
+        ttk.Entry(road_frame, textvariable=self.nrd2, width=10).grid(row=0, column=5, sticky=(tk.W, tk.E), pady=5, padx=5)
+        
+        ttk.Button(road_frame, text="⚙️ Configura Sorgenti Stradali", 
+                  command=self.configure_road_emissions).grid(row=1, column=0, columnspan=6, pady=10)
         
         # === SEZIONE LINEE GALLEGGIANTI ===
         line_frame = ttk.LabelFrame(scrollable_frame, text="Emissioni Linee Galleggianti (Buoyant Line)", padding="10")
@@ -339,15 +347,18 @@ class CalpuffWindow:
     
     def configure_flare_emissions(self):
         """Apre finestra per configurare emissioni flare"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.flare_sources_window import FlareSourcesWindow
+        FlareSourcesWindow(self.window, self.temp_dir)
     
     def configure_road_emissions(self):
         """Apre finestra per configurare emissioni stradali"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.road_sources_window import RoadSourcesWindow
+        RoadSourcesWindow(self.window, self.temp_dir)
     
     def configure_line_emissions(self):
         """Apre finestra per configurare linee galleggianti"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.line_sources_window import LineSourcesWindow
+        LineSourcesWindow(self.window, self.temp_dir)
     
     def configure_scaling_factors(self):
         """Apre finestra per configurare scaling factors"""
