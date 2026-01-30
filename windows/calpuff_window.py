@@ -362,7 +362,8 @@ class CalpuffWindow:
     
     def configure_scaling_factors(self):
         """Apre finestra per configurare scaling factors"""
-        messagebox.showinfo("In Sviluppo", "Funzionalità in fase di sviluppo")
+        from windows.scaling_factors_window import ScalingFactorsWindow
+        ScalingFactorsWindow(self.window, self.temp_dir)
     
     def save_config(self):
         """Salva la configurazione CALPUFF"""

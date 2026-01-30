@@ -434,7 +434,7 @@ class RoadSourceEditor:
         left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Canvas e scrollbar per form
-        canvas = tk.Canvas(left_frame, width=510)
+        canvas = tk.Canvas(left_frame, width=480)
         scrollbar = ttk.Scrollbar(left_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
         
