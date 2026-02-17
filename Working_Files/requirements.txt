@@ -1,0 +1,4 @@
+pandas
+pyproj
+netCDF4 == 1.5.8
+scipy
