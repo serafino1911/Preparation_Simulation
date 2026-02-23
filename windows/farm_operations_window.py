@@ -7,6 +7,10 @@ from tkinter import ttk, messagebox, scrolledtext
 import json
 from pathlib import Path
 import threading
+import os
+from service.ctgproc_inp_writer import generate_ctgproc_inp
+from service.makegeo_inp_writer import generate_makegeo_inp
+from service.terrel_inp_writer import generate_terrel_inp
 
 try:
     import paramiko
@@ -829,6 +833,45 @@ class FarmOperationsWindow:
                     else:
                         self.log_message(f"  ✗ ERRORE durante la copia: {error}")
                         errors.append(f"{folder} (errore copia)")
+
+            # Generazione file .inp locali per CTGPROC, MAKEGEO, TERREL
+            self.log_message("\n" + "-"*50)
+            self.log_message("Generazione file .inp geografici in Outputs:")
+            try:
+                workspace_root = self.temp_dir.parent
+                output_dir = workspace_root / "Outputs"
+
+                domain_config_path = self.temp_dir / "domain_config.json"
+                landuse_config_path = self.temp_dir / "landuse_config.json"
+                orography_config_path = self.temp_dir / "orography_config.json"
+
+                required_configs = [domain_config_path, landuse_config_path, orography_config_path]
+                missing_configs = [path.name for path in required_configs if not path.exists()]
+                if missing_configs:
+                    missing_text = ", ".join(missing_configs)
+                    raise FileNotFoundError(f"Configurazioni mancanti: {missing_text}")
+
+                terrel_inp = generate_terrel_inp(
+                    domain_config_path=domain_config_path,
+                    orography_config_path=orography_config_path,
+                    output_dir=output_dir,
+                )
+                ctgproc_inp = generate_ctgproc_inp(
+                    domain_config_path=domain_config_path,
+                    landuse_config_path=landuse_config_path,
+                    output_dir=output_dir,
+                )
+                makegeo_inp = generate_makegeo_inp(
+                    domain_config_path=domain_config_path,
+                    output_dir=output_dir,
+                )
+
+                self.log_message(f"  ✓ Creato: {terrel_inp}")
+                self.log_message(f"  ✓ Creato: {ctgproc_inp}")
+                self.log_message(f"  ✓ Creato: {makegeo_inp}")
+            except Exception as inp_error:
+                self.log_message(f"  ✗ ERRORE generazione INP: {inp_error}")
+                errors.append(f"INP geografici ({inp_error})")
             
             # Upload dei file di output se presenti
             self.log_message("\n" + "-"*50)
@@ -838,8 +881,11 @@ class FarmOperationsWindow:
             
             # File da caricare: (percorso_locale, percorso_remoto, descrizione)
             files_to_upload = [
-                (Path("Outputs/oro.txt"), f"{working_folder}/TERREL/orografia/oro.txt", "orografia"),
-                (Path("Outputs/landuse.xyz"), f"{working_folder}/CTGPROC/landuse.xyz", "landuse")
+                (Path("Outputs/oro.txt"), f"{working_folder}/TERREL/oro.txt", "orografia"),
+                (Path("Outputs/landuse.xyz"), f"{working_folder}/CTGPROC/landuse.xyz", "landuse"),
+                (Path("Outputs/terrel.inp"), f"{working_folder}/TERREL/terrel.inp", "terrel.inp"),
+                (Path("Outputs/ctgproc.inp"), f"{working_folder}/CTGPROC/ctgproc.inp", "ctgproc.inp"),
+                (Path("Outputs/makegeo.inp"), f"{working_folder}/MAKEGEO_V3.2_L110401/makegeo.inp", "makegeo.inp")
             ]
             
             sftp = target_client.open_sftp()
@@ -1064,11 +1110,228 @@ class FarmOperationsWindow:
         messagebox.showinfo("Info", "Funzione Prepare Meteo da implementare")
     
     def launch_geographic(self):
-        """Lancia elaborazione dati geografici - DA IMPLEMENTARE"""
+        """Lancia elaborazione dati geografici: TERREL → CTGPROC → MAKEGEO"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+        
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+        
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+        
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+        
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch Geographic")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch Geographic da implementare")
+        
+        thread = threading.Thread(target=self._launch_geographic_thread)
+        thread.daemon = True
+        thread.start()
+    
+    def _launch_geographic_thread(self):
+        """Thread per lanciare la sequenza geografica TERREL → CTGPROC → MAKEGEO"""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+            
+            self.log_message("Connessione in corso...")
+            
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+            
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+            
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+            
+            self.log_message("✓ Connesso al farm")
+            #remuve rendondant "/" a fine percorso
+            worki_folder = working_folder.rstrip('/')
+            # Definizione percorsi e comandi
+            terrel_exe = f"{worki_folder}/TERREL/terrel_v7.0.0.exe"
+            ctgproc_exe = f"{worki_folder}/CTGPROC/ctgproc_nostro.exe"
+            makegeo_exe = f"{worki_folder}/MAKEGEO_V3.2_L110401/makegeo_v3.2.exe"
+            
+            terrel_inp = f"{worki_folder}/TERREL/terrel.inp"
+            ctgproc_inp = f"{worki_folder}/CTGPROC/ctgproc.inp"
+            makegeo_inp = f"{worki_folder}/MAKEGEO_V3.2_L110401/makegeo.inp"
+            
+            # Script bash per eseguire la sequenza completa
+            bash_script = f"""#!/bin/bash
+set -e
+
+echo "=== Inizio elaborazione geografica ==="
+
+# Carica ambiente Intel Fortran Compiler
+echo "Caricamento ambiente Intel Fortran..."
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo "✓ Intel Fortran environment caricato"
+else
+    echo "⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi..."
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d "/opt/intel/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+    if [ -d "/opt/intel/compilers_and_libraries/linux/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+fi
+
+# Setup librerie NetCDF 
+export LD_LIBRARY_PATH="/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH"
+
+cd {working_folder}
+
+# Step 1: TERREL
+echo "Step 1/3: Esecuzione TERREL..."
+cd TERREL
+{terrel_exe} terrel.inp
+if [ $? -ne 0 ]; then
+    echo "ERRORE: TERREL fallito"
+    exit 1
+fi
+echo "✓ TERREL completato"
+
+# Step 2: CTGPROC
+echo "Step 2/3: Esecuzione CTGPROC..."
+cd {worki_folder}/CTGPROC
+{ctgproc_exe} ctgproc.inp
+if [ $? -ne 0 ]; then
+    echo "ERRORE: CTGPROC fallito"
+    exit 2
+fi
+echo "✓ CTGPROC completato"
+
+# Step 3: Copia output TERREL e CTGPROC in MAKEGEO
+echo "Copia output per MAKEGEO..."
+cd {working_folder}
+cp TERREL/terrel.dat MAKEGEO_V3.2_L110401/terrel.dat
+cp CTGPROC/luse.dat MAKEGEO_V3.2_L110401/luse.dat
+echo "✓ Output copiati"
+
+# Step 4: MAKEGEO
+echo "Step 3/3: Esecuzione MAKEGEO..."
+cd {worki_folder}/MAKEGEO_V3.2_L110401
+{makegeo_exe} makegeo.inp
+if [ $? -ne 0 ]; then
+    echo "ERRORE: MAKEGEO fallito"
+    exit 3
+fi
+echo "✓ MAKEGEO completato"
+
+echo "=== Elaborazione geografica completata con successo ==="
+"""
+            
+            # Salva lo script sul server
+            script_path = f"{working_folder}/run_geographic.sh"
+            self.log_message("Creazione script di esecuzione...")
+            
+            sftp = target_client.open_sftp()
+            with sftp.open(script_path, 'w') as script_file:
+                script_file.write(bash_script)
+            sftp.close()
+            
+            # Rendi eseguibile lo script
+            stdin, stdout, stderr = target_client.exec_command(f'chmod +x {script_path}')
+            stdout.channel.recv_exit_status()
+            
+            self.log_message("✓ Script creato")
+            
+            # Esegui con bsub
+            self.log_message("\n" + "-"*50)
+            self.log_message("Sottomissione job con bsub -q pmten...")
+            target_client.exec_command(f'cd {working_folder} && rm -f geo_output.log geo_error.log')  # Pulisci log precedenti
+            bsub_command = f'cd {working_folder}; bsub -q pmten -o geo_output.log -e geo_error.log ./run_geographic.sh'
+            
+            stdin, stdout, stderr = target_client.exec_command(bsub_command)
+            output = stdout.read().decode()
+            error = stderr.read().decode()
+            exit_status = stdout.channel.recv_exit_status()
+            
+            if output:
+                self.log_message(f"Output bsub:\n{output}")
+            if error:
+                self.log_message(f"Stderr bsub:\n{error}")
+            
+            if exit_status == 0:
+                self.log_message("\n✓ Job sottomesso con successo!")
+                self.log_message("\nSequenza esecuzione:")
+                self.log_message("  1. TERREL → terrel.dat")
+                self.log_message("  2. CTGPROC → luse.dat")
+                self.log_message("  3. MAKEGEO (terrel.dat + luse.dat) → makegeo.dat")
+                self.log_message("\nLog disponibili:")
+                self.log_message(f"  - Output: {working_folder}/geo_output.log")
+                self.log_message(f"  - Errori: {working_folder}/geo_error.log")
+                
+                messagebox.showinfo(
+                    "Successo",
+                    "Job geografico sottomesso con successo!\n\n"
+                    "Sequenza: TERREL → CTGPROC → MAKEGEO\n"
+                    "Controlla i log per monitorare l'esecuzione."
+                )
+            else:
+                self.log_message(f"\n✗ Errore sottomissione job (exit code {exit_status})")
+                messagebox.showerror(
+                    "Errore",
+                    f"Errore durante la sottomissione del job.\nExit code: {exit_status}"
+                )
+            
+            target_client.close()
+            jump_client.close()
+            
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch Geographic:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def launch_meteo(self):
         """Lancia elaborazione dati meteo - DA IMPLEMENTARE"""
@@ -1085,11 +1348,200 @@ class FarmOperationsWindow:
         messagebox.showinfo("Info", "Funzione Launch Puntuale da implementare")
     
     def load_inp_calmet(self):
-        """Carica file INP per CALMET - DA IMPLEMENTARE"""
+        """Carica tutte le cartelle CALMET_INP* nel working folder del target server"""
+        self._load_inp_by_pattern("Load inp CALMET", "CALMET_INP*")
+
+    def _load_inp_by_pattern(self, operation_name, folder_pattern):
+        """Carica tutte le cartelle locali che matchano il pattern nel working folder remoto"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        local_base_dir = self.temp_dir.parent
+        inp_folders = sorted([path for path in local_base_dir.glob(folder_pattern) if path.is_dir()])
+
         self.log_message("\n" + "="*50)
-        self.log_message("Operazione: Load inp CALMET")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Load inp CALMET da implementare")
+        self.log_message(f"Operazione: {operation_name}")
+
+        if not inp_folders:
+            self.log_message(f"✗ Nessuna cartella {folder_pattern} trovata in: {local_base_dir}")
+            messagebox.showwarning(
+                "Attenzione",
+                f"Nessuna cartella {folder_pattern} trovata in:\n{local_base_dir}"
+            )
+            return
+
+        self.log_message(f"Cartelle trovate ({len(inp_folders)}):")
+        for folder in inp_folders:
+            self.log_message(f"  - {folder.name}")
+
+        thread = threading.Thread(
+            target=self._load_inp_folders_thread,
+            args=(inp_folders, operation_name)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _upload_folder_recursive(self, sftp, local_folder, remote_folder):
+        """Upload ricorsivo di una cartella locale su percorso remoto"""
+        try:
+            sftp.stat(remote_folder)
+        except FileNotFoundError:
+            sftp.mkdir(remote_folder)
+
+        for root, dirs, files in os.walk(local_folder):
+            root_path = Path(root)
+            relative_root = root_path.relative_to(local_folder)
+
+            remote_root = remote_folder
+            if str(relative_root) != '.':
+                remote_root = f"{remote_folder}/{str(relative_root).replace('\\\\', '/')}"
+
+            try:
+                sftp.stat(remote_root)
+            except FileNotFoundError:
+                sftp.mkdir(remote_root)
+
+            for directory_name in dirs:
+                remote_dir = f"{remote_root}/{directory_name}"
+                try:
+                    sftp.stat(remote_dir)
+                except FileNotFoundError:
+                    sftp.mkdir(remote_dir)
+
+            for file_name in files:
+                local_file = root_path / file_name
+                remote_file = f"{remote_root}/{file_name}"
+                sftp.put(str(local_file), remote_file)
+
+    def _load_inp_folders_thread(self, inp_folders, operation_name):
+        """Thread per upload cartelle INP al target server"""
+        jump_client = None
+        target_client = None
+        sftp = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            stdin, stdout, stderr = target_client.exec_command(f'mkdir -p "{working_folder}"')
+            exit_status = stdout.channel.recv_exit_status()
+            if exit_status != 0:
+                error_text = stderr.read().decode().strip()
+                raise RuntimeError(f"Impossibile creare/verificare working folder remoto: {error_text}")
+
+            sftp = target_client.open_sftp()
+            uploaded = []
+            errors = []
+
+            for local_folder in inp_folders:
+                remote_folder = f"{working_folder.rstrip('/')}/{local_folder.name}"
+                self.log_message(f"\nUpload cartella: {local_folder.name}")
+                self.log_message(f"  Locale: {local_folder}")
+                self.log_message(f"  Remoto: {remote_folder}")
+
+                try:
+                    self._upload_folder_recursive(sftp, local_folder, remote_folder)
+                    uploaded.append(local_folder.name)
+                    self.log_message("  ✓ Upload completato")
+                except Exception as upload_error:
+                    errors.append(f"{local_folder.name}: {upload_error}")
+                    self.log_message(f"  ✗ Errore upload: {upload_error}")
+
+            self.log_message("\n" + "="*50)
+            self.log_message(f"RIEPILOGO {operation_name.upper()}:")
+            self.log_message(f"  Cartelle richieste: {len(inp_folders)}")
+            self.log_message(f"  Upload riusciti: {len(uploaded)}")
+            if uploaded:
+                self.log_message(f"  Elenco upload: {', '.join(uploaded)}")
+            if errors:
+                self.log_message(f"  Errori: {len(errors)}")
+                for error in errors:
+                    self.log_message(f"    - {error}")
+
+            if errors:
+                messagebox.showwarning(
+                    "Attenzione",
+                    f"{operation_name} completato con errori.\nUpload riusciti: {len(uploaded)}\nErrori: {len(errors)}"
+                )
+            else:
+                messagebox.showinfo(
+                    "Successo",
+                    f"{operation_name} completato con successo!\nCartelle caricate: {len(uploaded)}"
+                )
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante {operation_name}:\n\n{str(e)}")
+        finally:
+            try:
+                if sftp:
+                    sftp.close()
+            except Exception:
+                pass
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def launch_calmet(self):
         """Lancia l'esecuzione di CALMET - DA IMPLEMENTARE"""
@@ -1099,11 +1551,8 @@ class FarmOperationsWindow:
         messagebox.showinfo("Info", "Funzione Launch CALMET da implementare")
     
     def load_inp_calpuff(self):
-        """Carica file INP per CALPUFF - DA IMPLEMENTARE"""
-        self.log_message("\n" + "="*50)
-        self.log_message("Operazione: Load inp CALPUFF")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Load inp CALPUFF da implementare")
+        """Carica tutte le cartelle CALPUFF_INP* nel working folder del target server"""
+        self._load_inp_by_pattern("Load inp CALPUFF", "CALPUFF_INP*")
     
     def launch_calpuff(self):
         """Lancia l'esecuzione di CALPUFF - DA IMPLEMENTARE"""
@@ -1113,11 +1562,8 @@ class FarmOperationsWindow:
         messagebox.showinfo("Info", "Funzione Launch CALPUFF da implementare")
     
     def load_inp_calpost(self):
-        """Carica file INP per CALPOST - DA IMPLEMENTARE"""
-        self.log_message("\n" + "="*50)
-        self.log_message("Operazione: Load inp CALPOST")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Load inp CALPOST da implementare")
+        """Carica tutte le cartelle CALPOST_INP* nel working folder del target server"""
+        self._load_inp_by_pattern("Load inp CALPOST", "CALPOST_INP*")
     
     def launch_calpost(self):
         """Lancia l'esecuzione di CALPOST - DA IMPLEMENTARE"""

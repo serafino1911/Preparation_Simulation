@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import json
 from pathlib import Path
+from service.calmet_inp_writer import generate_daily_inp_files
 
 
 class CalmetWindow:
@@ -324,9 +325,10 @@ class CalmetWindow:
         row += 1
         
         ttk.Button(button_frame, text="💾 Salva", command=self.save_config, width=20).pack(side=tk.LEFT, padx=10)
+        ttk.Button(button_frame, text="📝 Create INP", command=self.create_inp_files, width=20).pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="❌ Annulla", command=self.window.destroy, width=20).pack(side=tk.LEFT, padx=10)
     
-    def save_config(self):
+    def save_config(self, show_message=True, close_window=True):
         """Salva la configurazione CALMET"""
         config_data = {
             'start_date': self.start_date.get(),
@@ -364,8 +366,54 @@ class CalmetWindow:
             with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
             
-            messagebox.showinfo("Successo", f"Configurazione CALMET salvata in:\n{config_file}")
-            self.window.destroy()
+            if show_message:
+                messagebox.showinfo("Successo", f"Configurazione CALMET salvata in:\n{config_file}")
+            if close_window:
+                self.window.destroy()
+            return True
         
         except Exception as e:
             messagebox.showerror("Errore", f"Errore durante il salvataggio:\n{str(e)}")
+            return False
+
+    def create_inp_files(self):
+        """Crea i file INP CALMET giornalieri da configurazioni CALMET/temporal/domain/landuse."""
+        if not self.save_config(show_message=False, close_window=False):
+            return
+
+        calmet_config_path = self.temp_dir / 'calmet_config.json'
+        temporal_config_path = self.temp_dir / 'temporal_config.json'
+        domain_config_path = self.temp_dir / 'domain_config.json'
+        landuse_config_path = self.temp_dir / 'landuse_config.json'
+
+        missing_files = [
+            str(path.name)
+            for path in [temporal_config_path, domain_config_path, landuse_config_path]
+            if not path.exists()
+        ]
+        if missing_files:
+            messagebox.showerror(
+                "Errore",
+                "Configurazioni mancanti per la creazione INP:\n" + "\n".join(missing_files)
+            )
+            return
+
+        try:
+            output_dir = self.temp_dir.parent / 'CALMET_INP'
+            created_files = generate_daily_inp_files(
+                calmet_config_path=calmet_config_path,
+                temporal_config_path=temporal_config_path,
+                domain_config_path=domain_config_path,
+                landuse_config_path=landuse_config_path,
+                output_dir=output_dir,
+            )
+
+            if created_files:
+                messagebox.showinfo(
+                    "Successo",
+                    f"Creati {len(created_files)} file INP in:\n{output_dir}"
+                )
+            else:
+                messagebox.showwarning("Attenzione", "Nessun file INP creato")
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore durante la creazione degli INP:\n{str(e)}")
