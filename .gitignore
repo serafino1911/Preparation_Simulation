@@ -31,6 +31,7 @@ wheels/
 Base procedura/
 Geotiff2/
 Outputs/
+CALMET_INP*/
 Prova*/
 *.tif
 *.xyz
