@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import threading
 import os
+import re
 from service.ctgproc_inp_writer import generate_ctgproc_inp
 from service.makegeo_inp_writer import generate_makegeo_inp
 from service.terrel_inp_writer import generate_terrel_inp
@@ -1087,6 +1088,19 @@ class FarmOperationsWindow:
                 
                 if exit_status == 0:
                     self.log_message(f"  ✓ Cartella copiata con successo!")
+                    
+                    # Se è CALMET, copia anche makegeo.dat da MAKEGEO_V3.2_L110401
+                    if folder_name == "CALMET":
+                        makegeo_src = f"{working_folder}/MAKEGEO_V3.2_L110401/makegeo.dat"
+                        makegeo_dst = f"{dest_path}/makegeo.dat"
+                        self.log_message(f"  → Copia makegeo.dat da MAKEGEO_V3.2_L110401...")
+                        stdin, stdout, stderr = target_client.exec_command(f'cp "{makegeo_src}" "{makegeo_dst}" 2>/dev/null && echo "OK" || echo "SKIP"')
+                        result = stdout.read().decode().strip()
+                        if result == "OK":
+                            self.log_message(f"  ✓ makegeo.dat copiato in CALMET")
+                        else:
+                            self.log_message(f"  ⊙ makegeo.dat non trovato (operazione facoltativa)")
+                    
                     self.log_message(f"\n✓ {operation_name} completato con successo!")
                     messagebox.showinfo("Successo", f"{operation_name} completato!\nCartella {folder_name} copiata con successo.")
                 else:
@@ -1544,33 +1558,880 @@ echo "=== Elaborazione geografica completata con successo ==="
                 pass
     
     def launch_calmet(self):
-        """Lancia l'esecuzione di CALMET - DA IMPLEMENTARE"""
+        """Lancia CALMET su tutti i file .inp in ordine data con job bsub sequenziale"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        calmet_config_path = self.temp_dir / "calmet_config.json"
+        if not calmet_config_path.exists():
+            messagebox.showerror(
+                "Errore",
+                "Configurazione CALMET non trovata.\n\n"
+                "Apri la finestra CALMET e salva la configurazione prima di lanciare."
+            )
+            return
+
+        try:
+            with open(calmet_config_path, 'r', encoding='utf-8') as config_file:
+                calmet_config = json.load(config_file)
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile leggere calmet_config.json:\n\n{e}")
+            return
+
+        wrf_path = str(calmet_config.get('wrf_path', '')).strip()
+        calmet_data = str(calmet_config.get('calmet_data', 'CALMETDATA')).strip() or 'CALMETDATA'
+        link_calmet = bool(calmet_config.get('link_CALMET', False))
+
+        if not wrf_path:
+            messagebox.showerror(
+                "Errore",
+                "Il campo 'wrf_path' è vuoto nella configurazione CALMET.\n\n"
+                "Configura il percorso WRF nella finestra CALMET."
+            )
+            return
+
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch CALMET")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch CALMET da implementare")
+        self.log_message(f"wrf_path: {wrf_path}")
+        self.log_message(f"cartella output CALMET: {calmet_data}")
+        self.log_message(f"Modalità WRF: {'Link simbolici' if link_calmet else 'Copia file'}")
+
+        thread = threading.Thread(
+            target=self._launch_calmet_thread,
+            args=(wrf_path, calmet_data, link_calmet)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _launch_calmet_thread(self, wrf_path, calmet_data, link_calmet=False):
+        """Thread per preparare script remoto CALMET e sottometterlo via bsub"""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            inp_root_glob = f"{work_folder}/CALMET_INP*"
+            calmet_dir = f"{work_folder}/CALMET"
+            calmet_data_dir = f"{work_folder}/{calmet_data}"
+            script_path = f"{work_folder}/run_calmet_batch.sh"
+
+            self.log_message("Verifica cartelle remote CALMET/CALMET_INP*/WRF...")
+            checks = [
+                (f'test -d "{calmet_dir}"', f"Cartella CALMET non trovata: {calmet_dir}"),
+                (f'ls -d {inp_root_glob} >/dev/null 2>&1', f"Nessuna cartella CALMET_INP* trovata in {work_folder}"),
+                (f'test -d "{wrf_path}"', f"wrf_path non trovato sul server: {wrf_path}")
+            ]
+            for check_cmd, error_msg in checks:
+                stdin, stdout, stderr = target_client.exec_command(f'{check_cmd} && echo "OK" || echo "FAIL"')
+                if stdout.read().decode().strip() != "OK":
+                    raise RuntimeError(error_msg)
+
+            stdin, stdout, stderr = target_client.exec_command(
+                f'mkdir -p "{calmet_data_dir}" && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                error_text = stderr.read().decode().strip()
+                raise RuntimeError(f"Impossibile creare cartella output CALMET: {error_text}")
+
+            bash_script = f"""#!/bin/bash
+
+WORKING_FOLDER=\"{work_folder}\"
+CALMET_DIR=\"{calmet_dir}\"
+WRF_PATH=\"{wrf_path.rstrip('/')}\"
+CALMET_DATA_DIR=\"{calmet_data_dir}\"
+WRF_LINK_MODE=\"{'ln -sf' if link_calmet else 'cp'}\"
+
+echo \"=== Avvio batch CALMET ===\"
+echo \"Working folder: ${{WORKING_FOLDER}}\"
+echo \"CALMET dir: ${{CALMET_DIR}}\"
+echo \"WRF path: ${{WRF_PATH}}\"
+echo \"Output dir: ${{CALMET_DATA_DIR}}\"
+
+# Carica ambiente Intel Fortran Compiler
+echo \"Caricamento ambiente Intel Fortran...\"
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo \"✓ Intel Fortran environment caricato\"
+else
+    echo \"⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi...\"
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d \"/opt/intel/lib/intel64\" ]; then
+        export LD_LIBRARY_PATH=\"/opt/intel/lib/intel64:$LD_LIBRARY_PATH\"
+    fi
+    if [ -d \"/opt/intel/compilers_and_libraries/linux/lib/intel64\" ]; then
+        export LD_LIBRARY_PATH=\"/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH\"
+    fi
+fi
+
+# Setup librerie NetCDF
+export LD_LIBRARY_PATH=\"/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH\"
+
+mkdir -p \"${{CALMET_DATA_DIR}}\"
+
+shopt -s nullglob
+mapfile -t INP_FILES < <(find \"${{WORKING_FOLDER}}\" -maxdepth 2 -type f -path \"${{WORKING_FOLDER}}/CALMET_INP*/*.inp\" | sort)
+
+if [ ${{#INP_FILES[@]}} -eq 0 ]; then
+    echo \"ERRORE: nessun file .inp trovato in CALMET_INP*\"
+    exit 10
+fi
+
+echo \"File INP trovati: ${{#INP_FILES[@]}}\"
+
+for INP_FILE in \"${{INP_FILES[@]}}\"; do
+    INP_NAME=$(basename \"${{INP_FILE}}\")
+    INP_BASENAME=\"${{INP_NAME%.inp}}\"
+
+    if [[ \"${{INP_BASENAME}}\" =~ ([0-9]{{8}}) ]]; then
+        DATE_YYYYMMDD=\"${{BASH_REMATCH[1]}}\"
+    else
+        echo \"WARNING: data non trovata nel nome file ${{INP_NAME}} -> salto\"
+        continue
+    fi
+
+    YEAR=\"${{DATE_YYYYMMDD:0:4}}\"
+    MONTH=\"${{DATE_YYYYMMDD:4:2}}\"
+    DAY=\"${{DATE_YYYYMMDD:6:2}}\"
+    DATE_DASH=\"${{YEAR}}-${{MONTH}}-${{DAY}}\"
+    DATE_C=\"${{YEAR}}${{MONTH}}${{DAY}}\"
+
+    echo \"--------------------------------------------------\"
+    echo \"Elaborazione: ${{INP_NAME}} (data ${{DATE_DASH}})\"
+
+    cp \"${{INP_FILE}}\" \"${{CALMET_DIR}}/calmet.inp\"
+    #filem2d = f'wrf_${{DATE_C}}_all.m2d'  # Nome file input 2D
+    #filem3d = f'wrf_${{DATE_C}}_all.m3d'  # Nome file input 3D
+    WRF_FILES=(\"${{WRF_PATH}}\"/wrf_\"${{DATE_C}}\"_*.m2d \"${{WRF_PATH}}\"/wrf_\"${{DATE_C}}\"_*.m3d)
+    if [ ${{#WRF_FILES[@]}} -eq 0 ]; then
+        echo \"⚠ ERRORE: nessun file WRF trovato per data ${{DATE_DASH}} in ${{WRF_PATH}}\"
+        echo \"Continuazione con prossimo file...\"
+        continue
+    fi
+
+    if [ \"${{WRF_LINK_MODE}}\" = \"ln -sf\" ]; then
+        for wrf_file in \"${{WRF_FILES[@]}}\"; do
+            ln -sf \"${{wrf_file}}\" \"${{CALMET_DIR}}/$(basename \\\"${{wrf_file}}\\\")\"\n        done
+    else
+        cp \"${{WRF_FILES[@]}}\" \"${{CALMET_DIR}}/\"
+    fi
+
+    cd \"${{CALMET_DIR}}\"
+    RUN_LOG=\"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.log\"
+    RUN_ERR=\"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.err\"
+
+    ./calmet.exe calmet.inp > \"${{RUN_LOG}}\" 2> \"${{RUN_ERR}}\"
+    RUN_STATUS=$?
+    if [ ${{RUN_STATUS}} -ne 0 ]; then
+        echo \"⚠ ERRORE: calmet.exe fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
+        echo \"Continuazione con prossimo file...\"
+    else
+        if [ -f \"${{CALMET_DIR}}/calmet.dat\" ]; then
+            cp \"${{CALMET_DIR}}/calmet.dat\" \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat\"
+        fi
+        if [ -f \"${{CALMET_DIR}}/calmet.lst\" ]; then
+            cp \"${{CALMET_DIR}}/calmet.lst\" \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.lst\"
+        fi
+        echo \"✓ Completato: ${{INP_NAME}}\"
+    fi
+    
+    # Pulizia file WRF utilizzati
+    echo \"Pulizia file WRF...\"
+    rm -f \"${{CALMET_DIR}}\"/wrf_*.m2d \"${{CALMET_DIR}}\"/wrf_*.m3d
+    echo \"✓ File WRF rimossi\"
+
+
+done
+
+echo \"=== Batch CALMET completato ===\"
+"""
+
+            self.log_message("Creazione script remoto CALMET...")
+            sftp = target_client.open_sftp()
+            with sftp.open(script_path, 'w') as script_file:
+                script_file.write(bash_script)
+            sftp.close()
+
+            stdin, stdout, stderr = target_client.exec_command(f'chmod +x "{script_path}"')
+            stdout.channel.recv_exit_status()
+            self.log_message(f"✓ Script creato: {script_path}")
+
+            bsub_out = f"{calmet_data_dir}/calmet_batch_output.log"
+            bsub_err = f"{calmet_data_dir}/calmet_batch_error.log"
+            target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
+
+            self.log_message("Sottomissione job CALMET con bsub -q pmten...")
+            bsub_command = (
+                f'cd "{work_folder}"; '
+                f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+            )
+            stdin, stdout, stderr = target_client.exec_command(bsub_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output bsub:\n{output}")
+            if error:
+                self.log_message(f"Stderr bsub:\n{error}")
+
+            job_id = None
+            match = re.search(r"<([0-9]+)>", output or "")
+            if match:
+                job_id = match.group(1)
+
+            if exit_status == 0:
+                self.log_message("\n✓ Job CALMET sottomesso con successo!")
+                if job_id:
+                    self.log_message(f"Job ID: {job_id}")
+                self.log_message("Esecuzione sequenziale prevista per tutti i .inp in ordine data.")
+                self.log_message(f"Log batch: {bsub_out}")
+                self.log_message(f"Error batch: {bsub_err}")
+                self.log_message(f"Output run-by-run in: {calmet_data_dir}")
+
+                messagebox.showinfo(
+                    "Successo",
+                    "Job CALMET sottomesso con successo!\n\n"
+                    "Esecuzione sequenziale avviata per tutti i file .inp in CALMET_INP*.\n"
+                    f"Output e log disponibili in: {calmet_data_dir}"
+                )
+            else:
+                raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch CALMET:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def load_inp_calpuff(self):
         """Carica tutte le cartelle CALPUFF_INP* nel working folder del target server"""
         self._load_inp_by_pattern("Load inp CALPUFF", "CALPUFF_INP*")
     
     def launch_calpuff(self):
-        """Lancia l'esecuzione di CALPUFF - DA IMPLEMENTARE"""
+        """Lancia CALPUFF su tutti i file .inp in ordine data con job bsub sequenziale"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        calmet_config_path = self.temp_dir / "calmet_config.json"
+        if not calmet_config_path.exists():
+            messagebox.showerror(
+                "Errore",
+                "Configurazione CALMET non trovata.\n\n"
+                "Apri la finestra CALMET e salva la configurazione prima di lanciare CALPUFF."
+            )
+            return
+
+        try:
+            with open(calmet_config_path, 'r', encoding='utf-8') as config_file:
+                calmet_config = json.load(config_file)
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile leggere calmet_config.json:\n\n{e}")
+            return
+
+        calpuff_data = str(calmet_config.get('calpuff_data', 'CALPUFFDATA')).strip() or 'CALPUFFDATA'
+
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch CALPUFF")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch CALPUFF da implementare")
+        self.log_message(f"cartella output CALPUFF: {calpuff_data}")
+
+        thread = threading.Thread(
+            target=self._launch_calpuff_thread,
+            args=(calpuff_data,)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _launch_calpuff_thread(self, calpuff_data):
+        """Thread per preparare script remoto CALPUFF e sottometterlo via bsub"""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            inp_root_glob = f"{work_folder}/CALPUFF_INP*"
+            calpuff_dir = f"{work_folder}/CALPUFF"
+            calpuff_data_dir = f"{work_folder}/{calpuff_data}"
+            script_path = f"{work_folder}/run_calpuff_batch.sh"
+
+            self.log_message("Verifica cartelle remote CALPUFF/CALPUFF_INP*...")
+            checks = [
+                (f'test -d "{calpuff_dir}"', f"Cartella CALPUFF non trovata: {calpuff_dir}"),
+                (f'ls -d {inp_root_glob} >/dev/null 2>&1', f"Nessuna cartella CALPUFF_INP* trovata in {work_folder}"),
+            ]
+            for check_cmd, error_msg in checks:
+                stdin, stdout, stderr = target_client.exec_command(f'{check_cmd} && echo "OK" || echo "FAIL"')
+                if stdout.read().decode().strip() != "OK":
+                    raise RuntimeError(error_msg)
+
+            stdin, stdout, stderr = target_client.exec_command(
+                f'mkdir -p "{calpuff_data_dir}" && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                error_text = stderr.read().decode().strip()
+                raise RuntimeError(f"Impossibile creare cartella output CALPUFF: {error_text}")
+
+            bash_script = f"""#!/bin/bash
+
+WORKING_FOLDER=\"{work_folder}\"
+CALPUFF_DIR=\"{calpuff_dir}\"
+CALPUFF_DATA_DIR=\"{calpuff_data_dir}\"
+
+echo \"=== Avvio batch CALPUFF ===\"
+echo \"Working folder: ${{WORKING_FOLDER}}\"
+echo \"CALPUFF dir: ${{CALPUFF_DIR}}\"
+echo \"Output dir: ${{CALPUFF_DATA_DIR}}\"
+
+# Carica ambiente Intel Fortran Compiler
+echo \"Caricamento ambiente Intel Fortran...\"
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo \"✓ Intel Fortran environment caricato\"
+else
+    echo \"⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi...\"
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d \"/opt/intel/lib/intel64\" ]; then
+        export LD_LIBRARY_PATH=\"/opt/intel/lib/intel64:$LD_LIBRARY_PATH\"
+    fi
+    if [ -d \"/opt/intel/compilers_and_libraries/linux/lib/intel64\" ]; then
+        export LD_LIBRARY_PATH=\"/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH\"
+    fi
+fi
+
+# Setup librerie NetCDF
+export LD_LIBRARY_PATH=\"/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH\"
+
+mkdir -p \"${{CALPUFF_DATA_DIR}}\"
+
+shopt -s nullglob
+mapfile -t INP_FILES < <(find \"${{WORKING_FOLDER}}\" -maxdepth 2 -type f -path \"${{WORKING_FOLDER}}/CALPUFF_INP*/*.inp\" | sort)
+
+if [ ${{#INP_FILES[@]}} -eq 0 ]; then
+    echo \"ERRORE: nessun file .inp trovato in CALPUFF_INP*\"
+    exit 10
+fi
+
+if [ -x \"${{CALPUFF_DIR}}/calpuff.exe\" ]; then
+    CALPUFF_EXE=\"${{CALPUFF_DIR}}/calpuff.exe\"
+else
+    mapfile -t CALPUFF_EXE_CANDIDATES < <(find \"${{CALPUFF_DIR}}\" -maxdepth 1 -type f -name \"calpuff*.exe\" | sort)
+    if [ ${{#CALPUFF_EXE_CANDIDATES[@]}} -eq 0 ]; then
+        echo \"ERRORE: eseguibile CALPUFF non trovato in ${{CALPUFF_DIR}}\"
+        exit 11
+    fi
+    CALPUFF_EXE=\"${{CALPUFF_EXE_CANDIDATES[0]}}\"
+fi
+
+echo \"Eseguibile CALPUFF: ${{CALPUFF_EXE}}\"
+echo \"File INP trovati: ${{#INP_FILES[@]}}\"
+
+for INP_FILE in \"${{INP_FILES[@]}}\"; do
+    INP_NAME=$(basename \"${{INP_FILE}}\")
+    INP_BASENAME=\"${{INP_NAME%.inp}}\"
+
+    echo \"--------------------------------------------------\"
+    echo \"Elaborazione: ${{INP_NAME}}\"
+
+    cp \"${{INP_FILE}}\" \"${{CALPUFF_DIR}}/calpuff.inp\"
+
+    cd \"${{CALPUFF_DIR}}\"
+    RUN_LOG=\"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}.log\"
+    RUN_ERR=\"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}.err\"
+
+    \"${{CALPUFF_EXE}}\" calpuff.inp > \"${{RUN_LOG}}\" 2> \"${{RUN_ERR}}\"
+    RUN_STATUS=$?
+    if [ ${{RUN_STATUS}} -ne 0 ]; then
+        echo \"⚠ ERRORE: calpuff fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
+        echo \"Continuazione con prossimo file...\"
+    else
+        for OUTPUT_FILE in CALPUFFOUTPUT_*.* RESTART*.DAT; do
+            if [ -f \"${{OUTPUT_FILE}}\" ]; then
+                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}_${{OUTPUT_FILE}}\"
+            fi
+        done
+        echo \"✓ Completato: ${{INP_NAME}}\"
+    fi
+done
+
+echo \"=== Batch CALPUFF completato ===\"
+"""
+
+            self.log_message("Creazione script remoto CALPUFF...")
+            sftp = target_client.open_sftp()
+            with sftp.open(script_path, 'w') as script_file:
+                script_file.write(bash_script)
+            sftp.close()
+
+            stdin, stdout, stderr = target_client.exec_command(f'chmod +x "{script_path}"')
+            stdout.channel.recv_exit_status()
+            self.log_message(f"✓ Script creato: {script_path}")
+
+            bsub_out = f"{calpuff_data_dir}/calpuff_batch_output.log"
+            bsub_err = f"{calpuff_data_dir}/calpuff_batch_error.log"
+            target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
+
+            self.log_message("Sottomissione job CALPUFF con bsub -q pmten...")
+            bsub_command = (
+                f'cd "{work_folder}"; '
+                f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+            )
+            stdin, stdout, stderr = target_client.exec_command(bsub_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output bsub:\n{output}")
+            if error:
+                self.log_message(f"Stderr bsub:\n{error}")
+
+            job_id = None
+            match = re.search(r"<([0-9]+)>", output or "")
+            if match:
+                job_id = match.group(1)
+
+            if exit_status == 0:
+                self.log_message("\n✓ Job CALPUFF sottomesso con successo!")
+                if job_id:
+                    self.log_message(f"Job ID: {job_id}")
+                self.log_message("Esecuzione sequenziale prevista per tutti i .inp in ordine data.")
+                self.log_message(f"Log batch: {bsub_out}")
+                self.log_message(f"Error batch: {bsub_err}")
+                self.log_message(f"Output run-by-run in: {calpuff_data_dir}")
+
+                messagebox.showinfo(
+                    "Successo",
+                    "Job CALPUFF sottomesso con successo!\n\n"
+                    "Esecuzione sequenziale avviata per tutti i file .inp in CALPUFF_INP*.\n"
+                    f"Output e log disponibili in: {calpuff_data_dir}"
+                )
+            else:
+                raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch CALPUFF:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def load_inp_calpost(self):
         """Carica tutte le cartelle CALPOST_INP* nel working folder del target server"""
         self._load_inp_by_pattern("Load inp CALPOST", "CALPOST_INP*")
     
     def launch_calpost(self):
-        """Lancia l'esecuzione di CALPOST - DA IMPLEMENTARE"""
+        """Lancia CALPOST su tutti i file .inp in ordine data/ora con job bsub sequenziale"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        calmet_config_path = self.temp_dir / "calmet_config.json"
+        if not calmet_config_path.exists():
+            messagebox.showerror(
+                "Errore",
+                "Configurazione CALMET non trovata.\n\n"
+                "Apri la finestra CALMET e salva la configurazione prima di lanciare CALPOST."
+            )
+            return
+
+        try:
+            with open(calmet_config_path, 'r', encoding='utf-8') as config_file:
+                calmet_config = json.load(config_file)
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile leggere calmet_config.json:\n\n{e}")
+            return
+
+        calpost_data = str(calmet_config.get('calpost_data', 'CALPOSTDATA')).strip() or 'CALPOSTDATA'
+        calpuff_data = str(calmet_config.get('calpuff_data', 'CALPUFFDATA')).strip() or 'CALPUFFDATA'
+
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch CALPOST")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch CALPOST da implementare")
+        self.log_message(f"cartella output CALPOST: {calpost_data}")
+
+        thread = threading.Thread(
+            target=self._launch_calpost_thread,
+            args=(calpost_data, calpuff_data)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _launch_calpost_thread(self, calpost_data, calpuff_data):
+        """Thread per preparare script remoto CALPOST e sottometterlo via bsub"""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            inp_root_glob = f"{work_folder}/CALPOST_INP*"
+            calpost_dir = f"{work_folder}/CALPOST"
+            calpuff_dir = f"{work_folder}/CALPUFF"
+            calpuff_data_dir = f"{work_folder}/{calpuff_data}"
+            calpost_data_dir = f"{work_folder}/{calpost_data}"
+            script_path = f"{work_folder}/run_calpost_batch.sh"
+
+            self.log_message("Verifica cartelle remote CALPOST/CALPOST_INP*...")
+            checks = [
+                (f'test -d "{calpost_dir}"', f"Cartella CALPOST non trovata: {calpost_dir}"),
+                (f'ls -d {inp_root_glob} >/dev/null 2>&1', f"Nessuna cartella CALPOST_INP* trovata in {work_folder}"),
+            ]
+            for check_cmd, error_msg in checks:
+                stdin, stdout, stderr = target_client.exec_command(f'{check_cmd} && echo "OK" || echo "FAIL"')
+                if stdout.read().decode().strip() != "OK":
+                    raise RuntimeError(error_msg)
+
+            stdin, stdout, stderr = target_client.exec_command(
+                f'mkdir -p "{calpost_data_dir}" && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                error_text = stderr.read().decode().strip()
+                raise RuntimeError(f"Impossibile creare cartella output CALPOST: {error_text}")
+
+            bash_script = f"""#!/bin/bash
+
+WORKING_FOLDER=\"{work_folder}\"
+CALPOST_DIR=\"{calpost_dir}\"
+CALPUFF_DIR=\"{calpuff_dir}\"
+CALPUFF_DATA_DIR=\"{calpuff_data_dir}\"
+CALPOST_DATA_DIR=\"{calpost_data_dir}\"
+
+echo \"=== Avvio batch CALPOST ===\"
+echo \"Working folder: ${{WORKING_FOLDER}}\"
+echo \"CALPOST dir: ${{CALPOST_DIR}}\"
+echo \"Output dir: ${{CALPOST_DATA_DIR}}\"
+
+# Carica ambiente Intel Fortran Compiler
+echo \"Caricamento ambiente Intel Fortran...\"
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo \"✓ Intel Fortran environment caricato\"
+else
+    echo \"⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi...\"
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d \"/opt/intel/lib/intel64\" ]; then
+        export LD_LIBRARY_PATH=\"/opt/intel/lib/intel64:$LD_LIBRARY_PATH\"
+    fi
+    if [ -d \"/opt/intel/compilers_and_libraries/linux/lib/intel64\" ]; then
+        export LD_LIBRARY_PATH=\"/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH\"
+    fi
+fi
+
+# Setup librerie NetCDF
+export LD_LIBRARY_PATH=\"/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH\"
+
+mkdir -p \"${{CALPOST_DATA_DIR}}\"
+
+shopt -s nullglob
+mapfile -t INP_FILES < <(find \"${{WORKING_FOLDER}}\" -maxdepth 2 -type f -path \"${{WORKING_FOLDER}}/CALPOST_INP*/*.inp\" | sort)
+
+if [ ${{#INP_FILES[@]}} -eq 0 ]; then
+    echo \"ERRORE: nessun file .inp trovato in CALPOST_INP*\"
+    exit 10
+fi
+
+if [ -x \"${{CALPOST_DIR}}/calpost.exe\" ]; then
+    CALPOST_EXE=\"${{CALPOST_DIR}}/calpost.exe\"
+else
+    mapfile -t CALPOST_EXE_CANDIDATES < <(find \"${{CALPOST_DIR}}\" -maxdepth 1 -type f -name \"calpost*.exe\" | sort)
+    if [ ${{#CALPOST_EXE_CANDIDATES[@]}} -eq 0 ]; then
+        echo \"ERRORE: eseguibile CALPOST non trovato in ${{CALPOST_DIR}}\"
+        exit 11
+    fi
+    CALPOST_EXE=\"${{CALPOST_EXE_CANDIDATES[0]}}\"
+fi
+
+echo \"Eseguibile CALPOST: ${{CALPOST_EXE}}\"
+echo \"File INP trovati: ${{#INP_FILES[@]}}\"
+
+if [ -d \"${{CALPUFF_DIR}}\" ]; then
+    cp -f \"${{CALPUFF_DIR}}\"/*.CON \"${{CALPOST_DIR}}\"/ 2>/dev/null || true
+fi
+if [ -d \"${{CALPUFF_DATA_DIR}}\" ]; then
+    cp -f \"${{CALPUFF_DATA_DIR}}\"/*.CON \"${{CALPOST_DIR}}\"/ 2>/dev/null || true
+fi
+
+for INP_FILE in \"${{INP_FILES[@]}}\"; do
+    INP_NAME=$(basename \"${{INP_FILE}}\")
+    INP_BASENAME=\"${{INP_NAME%.inp}}\"
+
+    echo \"--------------------------------------------------\"
+    echo \"Elaborazione: ${{INP_NAME}}\"
+
+    cp \"${{INP_FILE}}\" \"${{CALPOST_DIR}}/calpost.inp\"
+
+    cd \"${{CALPOST_DIR}}\"
+    RUN_LOG=\"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}.log\"
+    RUN_ERR=\"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}.err\"
+
+    \"${{CALPOST_EXE}}\" calpost.inp > \"${{RUN_LOG}}\" 2> \"${{RUN_ERR}}\"
+    RUN_STATUS=$?
+    if [ ${{RUN_STATUS}} -ne 0 ]; then
+        echo \"⚠ ERRORE: calpost fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
+        echo \"Continuazione con prossimo file...\"
+    else
+        for OUTPUT_FILE in CALPOST_*.LST *.CSV *.GRD *.ASC *.DAT; do
+            if [ -f \"${{OUTPUT_FILE}}\" ]; then
+                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}_${{OUTPUT_FILE}}\"
+            fi
+        done
+        echo \"✓ Completato: ${{INP_NAME}}\"
+    fi
+done
+
+echo \"=== Batch CALPOST completato ===\"
+"""
+
+            self.log_message("Creazione script remoto CALPOST...")
+            sftp = target_client.open_sftp()
+            with sftp.open(script_path, 'w') as script_file:
+                script_file.write(bash_script)
+            sftp.close()
+
+            stdin, stdout, stderr = target_client.exec_command(f'chmod +x "{script_path}"')
+            stdout.channel.recv_exit_status()
+            self.log_message(f"✓ Script creato: {script_path}")
+
+            bsub_out = f"{calpost_data_dir}/calpost_batch_output.log"
+            bsub_err = f"{calpost_data_dir}/calpost_batch_error.log"
+            target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
+
+            self.log_message("Sottomissione job CALPOST con bsub -q pmten...")
+            bsub_command = (
+                f'cd "{work_folder}"; '
+                f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+            )
+            stdin, stdout, stderr = target_client.exec_command(bsub_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output bsub:\n{output}")
+            if error:
+                self.log_message(f"Stderr bsub:\n{error}")
+
+            job_id = None
+            match = re.search(r"<([0-9]+)>", output or "")
+            if match:
+                job_id = match.group(1)
+
+            if exit_status == 0:
+                self.log_message("\n✓ Job CALPOST sottomesso con successo!")
+                if job_id:
+                    self.log_message(f"Job ID: {job_id}")
+                self.log_message("Esecuzione sequenziale prevista per tutti i .inp in ordine data/ora.")
+                self.log_message(f"Log batch: {bsub_out}")
+                self.log_message(f"Error batch: {bsub_err}")
+                self.log_message(f"Output run-by-run in: {calpost_data_dir}")
+
+                messagebox.showinfo(
+                    "Successo",
+                    "Job CALPOST sottomesso con successo!\n\n"
+                    "Esecuzione sequenziale avviata per tutti i file .inp in CALPOST_INP*.\n"
+                    f"Output e log disponibili in: {calpost_data_dir}"
+                )
+            else:
+                raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch CALPOST:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def launch_aggreg(self):
         """Lancia aggregazione dati - DA IMPLEMENTARE"""

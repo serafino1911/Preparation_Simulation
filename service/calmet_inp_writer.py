@@ -80,12 +80,10 @@ def generate_daily_inp_files(
     geo_dat = calmet_config.get('calmet_output', 'Auto')
     if not geo_dat or str(geo_dat).strip().lower() == 'auto':
         geo_dat = 'makegeo.dat'
-
+    
     base_replacements = {
         '[geo_dat]': str(geo_dat),
-        '[srfdat_temp]': str(calmet_config.get('wrf_path', 'SURF.DAT') or 'SURF.DAT'),
         '[metdat_temp]': str(calmet_config.get('calmet_data', 'CALMETDATA') or 'CALMETDATA'),
-        '[m3ddat_temp]': str(calmet_config.get('calpuff_data', 'CALPUFFDATA') or 'CALPUFFDATA'),
         '[projection]': str(calmet_config.get('proj', 'UTM') or 'UTM'),
         '[zone_num]': zone_num,
         '[zone_dir]': zone_dir,
@@ -107,11 +105,14 @@ def generate_daily_inp_files(
     current_date = start_date
     while current_date <= end_date:
         file_content = template_text
+        date_c = current_date.strftime('%Y%m%d')
         date_replacements = {
             '[year_temp]': current_date.strftime('%Y'),
             '[month_temp]': current_date.strftime('%m'),
             '[day_temp]': current_date.strftime('%d'),
             '[hour_temp]': '00',
+            '[srfdat_temp]': f'wrf_{date_c}_all.m2d',
+            '[m3ddat_temp]': f'wrf_{date_c}_all.m3d',
         }
         all_replacements = {**base_replacements, **date_replacements}
 

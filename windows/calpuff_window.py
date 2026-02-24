@@ -323,6 +323,7 @@ class CalpuffWindow:
         row += 1
         
         ttk.Button(button_frame, text="💾 Salva", command=self.save_config, width=20).pack(side=tk.LEFT, padx=10)
+        ttk.Button(button_frame, text="🛠️ Create INP", command=self.create_inp, width=20).pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="❌ Annulla", command=self.window.destroy, width=20).pack(side=tk.LEFT, padx=10)
     
     def configure_species(self):
@@ -364,69 +365,113 @@ class CalpuffWindow:
         """Apre finestra per configurare scaling factors"""
         from windows.scaling_factors_window import ScalingFactorsWindow
         ScalingFactorsWindow(self.window, self.temp_dir)
+
+    def create_inp(self):
+        """Crea i file .inp CALPUFF e CALPOST giornalieri in CALPUFF_INP e CALPOST_INP"""
+        try:
+            self._save_current_config(show_message=False, close_window=False)
+
+            from service.calpuff_inp_writer import generate_daily_inp_files
+            from service.calpost_inp_writer import generate_daily_calpost_files
+
+            workspace_root = self.temp_dir.parent
+            calpuff_output_dir = workspace_root / 'CALPUFF_INP'
+            calpost_output_dir = workspace_root / 'CALPOST_INP'
+
+            calpuff_config_path = self.temp_dir / 'calpuff_config.json'
+            temporal_config_path = self.temp_dir / 'temporal_config.json'
+            calmet_config_path = self.temp_dir / 'calmet_config.json'
+            domain_config_path = self.temp_dir / 'domain_config.json'
+            landuse_config_path = self.temp_dir / 'landuse_config.json'
+
+            required_configs = [
+                calpuff_config_path,
+                temporal_config_path,
+                calmet_config_path,
+                domain_config_path,
+                landuse_config_path,
+            ]
+            missing_configs = [path.name for path in required_configs if not path.exists()]
+            if missing_configs:
+                missing_text = ', '.join(missing_configs)
+                raise FileNotFoundError(f'Configurazioni mancanti: {missing_text}')
+
+            # Genera file CALPUFF
+            calpuff_files = generate_daily_inp_files(
+                calpuff_config_path=calpuff_config_path,
+                temporal_config_path=temporal_config_path,
+                calmet_config_path=calmet_config_path,
+                domain_config_path=domain_config_path,
+                landuse_config_path=landuse_config_path,
+                output_dir=calpuff_output_dir,
+            )
+
+            # Genera file CALPOST
+            calpost_files = generate_daily_calpost_files(
+                calpuff_config_path=calpuff_config_path,
+                temporal_config_path=temporal_config_path,
+                calmet_config_path=calmet_config_path,
+                output_dir=calpost_output_dir,
+            )
+
+            messagebox.showinfo(
+                "Successo",
+                f"Creati {len(calpuff_files)} file CALPUFF .inp in:\n{calpuff_output_dir}\n\n"
+                f"Creati {len(calpost_files)} file CALPOST .inp in:\n{calpost_output_dir}"
+            )
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore durante la creazione degli INP:\n{str(e)}")
+
+    def _save_current_config(self, show_message=True, close_window=True):
+        """Salva la configurazione CALPUFF corrente"""
+        config_file = self.temp_dir / 'calpuff_config.json'
+
+        if config_file.exists():
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+        else:
+            config_data = {}
+
+        config_data.update({
+            'num_periods': self.num_periods.get(),
+            'ioutu': self.ioutu.get(),
+            'iprtu': self.iprtu.get(),
+            'iptu': self.iptu.get(),
+            'npt2': self.npt2.get(),
+            'iaru': self.iaru.get(),
+            'nar2': self.nar2.get(),
+            'ivlu': self.ivlu.get(),
+            'nvl2': self.nvl2.get(),
+            'nfl2': self.nfl2.get(),
+            'nrd1': self.nrd1.get(),
+            'irdu': self.irdu.get(),
+            'nrd2': self.nrd2.get(),
+            'nln2': self.nln2.get(),
+            'nlines': self.nlines.get(),
+            'ilnu': self.ilnu.get(),
+            'mxnseg': self.mxnseg.get(),
+            'nlrise': self.nlrise.get(),
+            'xl': self.xl.get(),
+            'hbl': self.hbl.get(),
+            'wbl': self.wbl.get(),
+            'dxl': self.dxl.get(),
+            'fprimel': self.fprimel.get(),
+            'wml': self.wml.get(),
+            'tabella': self.tabella.get()
+        })
+
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=4, ensure_ascii=False)
+
+        if show_message:
+            messagebox.showinfo("Successo", f"Configurazione CALPUFF salvata in:\n{config_file}")
+        if close_window:
+            self.window.destroy()
     
     def save_config(self):
         """Salva la configurazione CALPUFF"""
         try:
-            config_file = self.temp_dir / 'calpuff_config.json'
-            
-            # Carica la configurazione esistente se presente
-            if config_file.exists():
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
-            else:
-                config_data = {}
-            
-            # Aggiorna solo i campi di questa finestra, mantenendo il resto
-            config_data.update({
-                # Base config
-                'num_periods': self.num_periods.get(),
-                'ioutu': self.ioutu.get(),
-                'iprtu': self.iprtu.get(),
-                
-                # Point emissions
-                'iptu': self.iptu.get(),
-                'npt2': self.npt2.get(),
-                
-                # Area emissions
-                'iaru': self.iaru.get(),
-                'nar2': self.nar2.get(),
-                
-                # Volume emissions
-                'ivlu': self.ivlu.get(),
-                'nvl2': self.nvl2.get(),
-                
-                # Flare emissions
-                'nfl2': self.nfl2.get(),
-                
-                # Road emissions
-                'nrd1': self.nrd1.get(),
-                'irdu': self.irdu.get(),
-                'nrd2': self.nrd2.get(),
-                
-                # Line emissions
-                'nln2': self.nln2.get(),
-                'nlines': self.nlines.get(),
-                'ilnu': self.ilnu.get(),
-                'mxnseg': self.mxnseg.get(),
-                'nlrise': self.nlrise.get(),
-                'xl': self.xl.get(),
-                'hbl': self.hbl.get(),
-                'wbl': self.wbl.get(),
-                'dxl': self.dxl.get(),
-                'fprimel': self.fprimel.get(),
-                'wml': self.wml.get(),
-                
-                # Scaling factors
-                'tabella': self.tabella.get()
-            })
-            
-            # Salva il file aggiornato
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, indent=4, ensure_ascii=False)
-            
-            messagebox.showinfo("Successo", f"Configurazione CALPUFF salvata in:\n{config_file}")
-            self.window.destroy()
+            self._save_current_config(show_message=True, close_window=True)
         
         except Exception as e:
             messagebox.showerror("Errore", f"Errore durante il salvataggio:\n{str(e)}")
