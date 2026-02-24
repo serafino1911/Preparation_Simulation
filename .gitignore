@@ -32,6 +32,8 @@ Base procedura/
 Geotiff2/
 Outputs/
 CALMET_INP*/
+CALPUFF_INP*/
+CALPUFF_OUT*/
 Prova*/
 *.tif
 *.xyz
