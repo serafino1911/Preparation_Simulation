@@ -33,7 +33,7 @@ Geotiff2/
 Outputs/
 CALMET_INP*/
 CALPUFF_INP*/
-CALPUFF_OUT*/
+CALPOST_INP*/
 Prova*/
 *.tif
 *.xyz
