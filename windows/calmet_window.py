@@ -266,7 +266,7 @@ class CalmetWindow:
         row += 1
         
         ttk.Label(proj_frame, text="Proiezione:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Combobox(proj_frame, textvariable=self.proj, values=['UTM', 'LCC'], state='readonly', width=18).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
+        ttk.Combobox(proj_frame, textvariable=self.proj, values=['LCC', 'UTM'], state='readonly', width=18).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
         
         ttk.Label(proj_frame, text="Zona:").grid(row=0, column=2, sticky=tk.W, pady=5)
         ttk.Entry(proj_frame, textvariable=self.zone, width=18).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=5)

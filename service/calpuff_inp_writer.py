@@ -280,7 +280,7 @@ def generate_daily_inp_files(
 
     _apply_runtime_config(calpuff_config, calmet_config, domain_config, landuse_config)
 
-    calmet_output = calmet_config.get('calmet_data', 'CALMETDATA')
+    calmet_output = calmet_config.get('calmet_data', 'CALMETDATA').lower()
     created_files: list[Path] = []
 
     current_date = start_date
@@ -332,6 +332,7 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     hour_e = 0
     # Nome base per i file di output
     out_name = f'CALPUFFOUTPUT_{star_wrf[:8]}.'
+    calmet_output = f'calmet_{star_wrf[:8]}.dat'
     # Apre il template del file di input
     template_candidate = Path('Working_Files') / 'calpuff_try.txt'
     template_path = template_candidate if template_candidate.exists() else None
@@ -374,7 +375,8 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     is_point_true = NPTDAT > 1 or (NPTDAT == 1 and POINT_NAMES[0] != 'DUMMY.DAT')  
     is_point = '!' if is_point_true else '*'  
     NPTDAT = NPTDAT if is_point_true else 0  
-    NPT1 = len(POINT_NAMES) if not is_point_true else 0
+    NPT1 = len(Puntual_Emission) if not is_point_true else 0
+    print("NPT1:", NPT1)
     string_point_name = ""  
     for name_point in POINT_NAMES:  
         string_point_name += f' none         input       {is_point} PTDAT={name_point}{is_point}   {is_point}END{is_point}\n'  
@@ -426,21 +428,23 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
 
 
     # VOLUME EMISSION
-    NVL1 = len(VOLUME_NAMES)
+    NVL1 = len(Volume_Emission) 
     file_calpuff = ff.sobstituter(file_calpuff, '[NVL1]', NVL1)   
     file_calpuff = ff.sobstituter(file_calpuff, '[IVLU]', IVLU)   
-    NVOLDAT = len(VOLUME_NAMES)  
+    NVOLDAT = len(VOLUME_NAMES)
     is_volume_true = NVOLDAT > 1 or (NVOLDAT == 1 and VOLUME_NAMES[0] != 'DUMMY.DAT')  
     is_volume = '!' if is_volume_true else '*'  
     NVOLDAT = NVOLDAT if is_volume_true else 0  
+    
     string_volume_name = ""  
     for name_volume in VOLUME_NAMES:  
         string_volume_name += f' none         input       {is_volume} VOLDAT={name_volume}{is_volume}   {is_volume}END{is_volume}\n'
     file_calpuff = ff.sobstituter(file_calpuff, '[NVOLDAT]', NVOLDAT)   
     file_calpuff = ff.sobstituter(file_calpuff, '[string_volume_name]', string_volume_name)   
     file_calpuff = ff.sobstituter(file_calpuff, '[NVL2]', NVL2)   
-    string_volume_constant = emission_volume_stringer(Volume_Emission, is_volume_true)  
-    string_scaling_factors_volume = emission_scalefactor_stringer(scal_fact_vol_sor, is_volume_true)  
+    is_volume_inp = True if NVL1 >=1 else False
+    string_volume_constant = emission_volume_stringer(Volume_Emission, is_volume_inp)  
+    string_scaling_factors_volume = emission_scalefactor_stringer(scal_fact_vol_sor, is_volume_inp)  
     file_calpuff=ff.sobstituter(file_calpuff, '[STRING_VOLUME_CONSTANT]', string_volume_constant)  
     file_calpuff=ff.sobstituter(file_calpuff, '[STRING_VOLUME_SCALE_FACTORS]', string_scaling_factors_volume)  
     file_calpuff = ff.sobstituter(file_calpuff, '[NVL2]', NVL2)      
@@ -512,8 +516,8 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     file_calpuff = ff.sobstituter(file_calpuff, '[string_flare_name]', string_flare_name)   
     file_calpuff = ff.sobstituter(file_calpuff, '[NFLDAT]', NFLDAT) 
     
-    #number of scaling factors
-    NSFTAB =  len(scal_fact_punt_sor) + len(scal_fact_area_sor) + len(scal_fact_vol_sor) + len(scal_fact_line_sor) + len(scal_fact_road_sor)
+
+    NSFTAB = len(TABELLA_FINALE_HD)
     file_calpuff = ff.sobstituter(file_calpuff, '[NSFTAB]', NSFTAB) 
 
     #DATE configuration

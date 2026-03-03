@@ -1095,20 +1095,21 @@ class FarmOperationsWindow:
                     self.log_message(f"  ✗ ERRORE durante la copia: {error}")
                     messagebox.showerror("Errore", f"Errore durante la copia:\n{error}")
                 
-                if folder_name == "CALMET":
-                    makegeo_src = f"{working_folder}/MAKEGEO_V3.2_L110401/makegeo.dat"
-                    makegeo_dst = f"{dest_path}/makegeo.dat"
-                    self.log_message(f"  → Copia makegeo.dat da MAKEGEO_V3.2_L110401...")
-                    stdin, stdout, stderr = target_client.exec_command(f'cp "{makegeo_src}" "{makegeo_dst}" 2>/dev/null && echo "OK" || echo "SKIP"')
-                    result = stdout.read().decode().strip()
-                    if result == "OK":
-                        self.log_message(f"  ✓ makegeo.dat copiato in CALMET")
-                    else:
-                        self.log_message(f"  ⊙ makegeo.dat non trovato (operazione facoltativa)")
                 
                 self.log_message(f"\n✓ {operation_name} completato con successo!")
                 messagebox.showinfo("Successo", f"{operation_name} completato!\nCartella {folder_name} copiata con successo.")
-
+            
+            
+            if folder_name == "CALMET":
+                makegeo_src = f"{working_folder}/MAKEGEO_V3.2_L110401/makegeo.dat"
+                makegeo_dst = f"{dest_path}/makegeo.dat"
+                self.log_message(f"  → Copia makegeo.dat da MAKEGEO_V3.2_L110401...")
+                stdin, stdout, stderr = target_client.exec_command(f'cp "{makegeo_src}" "{makegeo_dst}" 2>/dev/null && echo "OK" || echo "SKIP"')
+                result = stdout.read().decode().strip()
+                if result == "OK":
+                    self.log_message(f"  ✓ makegeo.dat copiato in CALMET")
+                else:
+                    self.log_message(f"  ⊙ makegeo.dat non trovato (operazione facoltativa)")
 
             target_client.close()
             jump_client.close()
@@ -1604,7 +1605,7 @@ echo "=== Elaborazione geografica completata con successo ==="
 
         wrf_path = str(calmet_config.get('wrf_path', '')).strip()
         calmet_data = str(calmet_config.get('calmet_data', 'CALMETDATA')).strip() or 'CALMETDATA'
-        link_calmet = bool(calmet_config.get('link_CALMET', False))
+        link_calmet = bool(calmet_config.get('link_calmet', calmet_config.get('link_CALMET', False)))
 
         if not wrf_path:
             messagebox.showerror(
@@ -1771,7 +1772,8 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
 
     if [ \"${{WRF_LINK_MODE}}\" = \"ln -sf\" ]; then
         for wrf_file in \"${{WRF_FILES[@]}}\"; do
-            ln -sf \"${{wrf_file}}\" \"${{CALMET_DIR}}/$(basename \\\"${{wrf_file}}\\\")\"\n        done
+            ln -sf \"${{wrf_file}}\" \"${{CALMET_DIR}}/\"  
+        done
     else
         cp \"${{WRF_FILES[@]}}\" \"${{CALMET_DIR}}/\"
     fi
@@ -1923,19 +1925,23 @@ echo \"=== Batch CALMET completato ===\"
             return
 
         calpuff_data = str(calmet_config.get('calpuff_data', 'CALPUFFDATA')).strip() or 'CALPUFFDATA'
-
+        calmet_data = str(calmet_config.get('calmet_data', 'CALMETDATA')).strip() or 'CALMETDATA'
+        link_calmet = bool(calmet_config.get('link_calmet', calmet_config.get('link_CALMET', False)))
+        
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch CALPUFF")
         self.log_message(f"cartella output CALPUFF: {calpuff_data}")
+        self.log_message(f"Sorgente CALMET: {calmet_data}")
+        self.log_message(f"Modalità file meteo CALMET→CALPUFF: {'Link simbolici' if link_calmet else 'Copia file'}")
 
         thread = threading.Thread(
             target=self._launch_calpuff_thread,
-            args=(calpuff_data,)
+            args=(calpuff_data, calmet_data, link_calmet)
         )
         thread.daemon = True
         thread.start()
 
-    def _launch_calpuff_thread(self, calpuff_data):
+    def _launch_calpuff_thread(self, calpuff_data, calmet_data='CALMETDATA', link_calmet=False):
         """Thread per preparare script remoto CALPUFF e sottometterlo via bsub"""
         jump_client = None
         target_client = None
@@ -1981,6 +1987,7 @@ echo \"=== Batch CALMET completato ===\"
             inp_root_glob = f"{work_folder}/CALPUFF_INP*"
             calpuff_dir = f"{work_folder}/CALPUFF"
             calpuff_data_dir = f"{work_folder}/{calpuff_data}"
+            calmet_data_dir = f"{work_folder}/{calmet_data}"
             script_path = f"{work_folder}/run_calpuff_batch.sh"
 
             self.log_message("Verifica cartelle remote CALPUFF/CALPUFF_INP*...")
@@ -2005,11 +2012,15 @@ echo \"=== Batch CALMET completato ===\"
 WORKING_FOLDER=\"{work_folder}\"
 CALPUFF_DIR=\"{calpuff_dir}\"
 CALPUFF_DATA_DIR=\"{calpuff_data_dir}\"
+CALMET_DATA_DIR=\"{calmet_data_dir}\"  
+CALMET_LINK_MODE=\"{'ln -sf' if link_calmet else 'cp -f'}\"
 
 echo \"=== Avvio batch CALPUFF ===\"
 echo \"Working folder: ${{WORKING_FOLDER}}\"
 echo \"CALPUFF dir: ${{CALPUFF_DIR}}\"
 echo \"Output dir: ${{CALPUFF_DATA_DIR}}\"
+echo \"CALMET data dir: ${{CALMET_DATA_DIR}}\"
+echo \"Modalità meteo CALMET→CALPUFF: ${{CALMET_LINK_MODE}}\"
 
 # Carica ambiente Intel Fortran Compiler
 echo \"Caricamento ambiente Intel Fortran...\"
@@ -2063,6 +2074,38 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
 
     cp \"${{INP_FILE}}\" \"${{CALPUFF_DIR}}/calpuff.inp\"
 
+    DATE_C=\"\"
+    if [[ \"${{INP_BASENAME}}\" =~ ([0-9]{{8}}) ]]; then
+        DATE_C=\"${{BASH_REMATCH[1]}}\"
+    fi
+
+    CALMET_DAT_SOURCE=\"\"
+    if [ -n \"${{DATE_C}}\" ] && [ -f \"${{CALMET_DATA_DIR}}/calmet_${{DATE_C}}.dat\" ]; then
+        CALMET_DAT_SOURCE=\"${{CALMET_DATA_DIR}}/calmet_${{DATE_C}}.dat\"
+    elif [ -f \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat\" ]; then
+        CALMET_DAT_SOURCE=\"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat\"
+    elif [ -n \"${{DATE_C}}\" ]; then
+        mapfile -t CALMET_DAT_CANDIDATES < <(find \"${{CALMET_DATA_DIR}}\" -maxdepth 1 -type f -iname \"*${{DATE_C}}*.dat\" | sort)
+        if [ ${{#CALMET_DAT_CANDIDATES[@]}} -gt 0 ]; then
+            CALMET_DAT_SOURCE=\"${{CALMET_DAT_CANDIDATES[0]}}\"
+        fi
+    fi
+
+    if [ -z \"${{CALMET_DAT_SOURCE}}\" ]; then
+        echo \"⚠ ERRORE: file CALMET .dat non trovato per ${{INP_NAME}} in ${{CALMET_DATA_DIR}}\"
+        echo \"Continuazione con prossimo file...\"
+        continue
+    fi
+
+    CALMET_DAT_BASENAME=$(basename \"${{CALMET_DAT_SOURCE}}\")
+    rm -f \"${{CALPUFF_DIR}}/calmet.dat\" \"${{CALPUFF_DIR}}/calmet_\"*.dat
+    if [ \"${{CALMET_LINK_MODE}}\" = \"ln -sf\" ]; then
+        ln -sf \"${{CALMET_DAT_SOURCE}}\" \"${{CALPUFF_DIR}}/${{CALMET_DAT_BASENAME}}\"
+    else
+        cp  \"${{CALMET_DAT_SOURCE}}\" \"${{CALPUFF_DIR}}/${{CALMET_DAT_BASENAME}}\"
+    fi
+    echo \"Meteo associato: ${{CALMET_DAT_BASENAME}}\"
+
     cd \"${{CALPUFF_DIR}}\"
     RUN_LOG=\"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}.log\"
     RUN_ERR=\"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}.err\"
@@ -2075,7 +2118,8 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
     else
         for OUTPUT_FILE in CALPUFFOUTPUT_*.* RESTART*.DAT; do
             if [ -f \"${{OUTPUT_FILE}}\" ]; then
-                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}_${{OUTPUT_FILE}}\"
+                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\"
+                rm -f CALPUFFOUTPUT_*.*
             fi
         done
         echo \"✓ Completato: ${{INP_NAME}}\"
