@@ -1090,23 +1090,26 @@ class FarmOperationsWindow:
                     self.log_message(f"  ✓ Cartella copiata con successo!")
                     
                     # Se è CALMET, copia anche makegeo.dat da MAKEGEO_V3.2_L110401
-                    if folder_name == "CALMET":
-                        makegeo_src = f"{working_folder}/MAKEGEO_V3.2_L110401/makegeo.dat"
-                        makegeo_dst = f"{dest_path}/makegeo.dat"
-                        self.log_message(f"  → Copia makegeo.dat da MAKEGEO_V3.2_L110401...")
-                        stdin, stdout, stderr = target_client.exec_command(f'cp "{makegeo_src}" "{makegeo_dst}" 2>/dev/null && echo "OK" || echo "SKIP"')
-                        result = stdout.read().decode().strip()
-                        if result == "OK":
-                            self.log_message(f"  ✓ makegeo.dat copiato in CALMET")
-                        else:
-                            self.log_message(f"  ⊙ makegeo.dat non trovato (operazione facoltativa)")
-                    
-                    self.log_message(f"\n✓ {operation_name} completato con successo!")
-                    messagebox.showinfo("Successo", f"{operation_name} completato!\nCartella {folder_name} copiata con successo.")
+
                 else:
                     self.log_message(f"  ✗ ERRORE durante la copia: {error}")
                     messagebox.showerror("Errore", f"Errore durante la copia:\n{error}")
-            
+                
+                if folder_name == "CALMET":
+                    makegeo_src = f"{working_folder}/MAKEGEO_V3.2_L110401/makegeo.dat"
+                    makegeo_dst = f"{dest_path}/makegeo.dat"
+                    self.log_message(f"  → Copia makegeo.dat da MAKEGEO_V3.2_L110401...")
+                    stdin, stdout, stderr = target_client.exec_command(f'cp "{makegeo_src}" "{makegeo_dst}" 2>/dev/null && echo "OK" || echo "SKIP"')
+                    result = stdout.read().decode().strip()
+                    if result == "OK":
+                        self.log_message(f"  ✓ makegeo.dat copiato in CALMET")
+                    else:
+                        self.log_message(f"  ⊙ makegeo.dat non trovato (operazione facoltativa)")
+                
+                self.log_message(f"\n✓ {operation_name} completato con successo!")
+                messagebox.showinfo("Successo", f"{operation_name} completato!\nCartella {folder_name} copiata con successo.")
+
+
             target_client.close()
             jump_client.close()
             
@@ -1696,6 +1699,7 @@ WORKING_FOLDER=\"{work_folder}\"
 CALMET_DIR=\"{calmet_dir}\"
 WRF_PATH=\"{wrf_path.rstrip('/')}\"
 CALMET_DATA_DIR=\"{calmet_data_dir}\"
+METDATA=\"{calmet_data}\"
 WRF_LINK_MODE=\"{'ln -sf' if link_calmet else 'cp'}\"
 
 echo \"=== Avvio batch CALMET ===\"
@@ -1782,11 +1786,14 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
         echo \"⚠ ERRORE: calmet.exe fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
         echo \"Continuazione con prossimo file...\"
     else
-        if [ -f \"${{CALMET_DIR}}/calmet.dat\" ]; then
-            cp \"${{CALMET_DIR}}/calmet.dat\" \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat\"
+        EXPECTED_DAT=$(find "${{CALMET_DIR}}" -maxdepth 1 -type f \( -iname "${{METDATA}}_${{DATE_C}}.dat" -o -iname "calmet.dat" \) | head -n 1)
+        if [ -n "${{EXPECTED_DAT}}" ]; then
+            cp "${{EXPECTED_DAT}}" "${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat"
+        else
+            echo "⚠ WARNING: file .dat non trovato (atteso: ${{METDATA}}_${{DATE_C}}.dat, case-insensitive)"
         fi
-        if [ -f \"${{CALMET_DIR}}/calmet.lst\" ]; then
-            cp \"${{CALMET_DIR}}/calmet.lst\" \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.lst\"
+        if [ -f \"${{CALMET_DIR}}/list.lst\" ]; then
+            cp \"${{CALMET_DIR}}/list.lst\" \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.lst\"
         fi
         echo \"✓ Completato: ${{INP_NAME}}\"
     fi

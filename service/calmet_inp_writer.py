@@ -83,7 +83,6 @@ def generate_daily_inp_files(
     
     base_replacements = {
         '[geo_dat]': str(geo_dat),
-        '[metdat_temp]': str(calmet_config.get('calmet_data', 'CALMETDATA') or 'CALMETDATA'),
         '[projection]': str(calmet_config.get('proj', 'UTM') or 'UTM'),
         '[zone_num]': zone_num,
         '[zone_dir]': zone_dir,
@@ -100,7 +99,7 @@ def generate_daily_inp_files(
         '[z_grid_face]': str(calmet_config.get('zface', '0.,20.,40.,80.,160.,300.,600.,1000.,1500.,2200.,3000.')),
         '[num_wrf_files_temp]': '24',
     }
-
+    metdata = calmet_config.get('calmet_data', 'CALMETDATA') or 'CALMETDATA'
     created_files = []
     current_date = start_date
     while current_date <= end_date:
@@ -113,6 +112,7 @@ def generate_daily_inp_files(
             '[hour_temp]': '00',
             '[srfdat_temp]': f'wrf_{date_c}_all.m2d',
             '[m3ddat_temp]': f'wrf_{date_c}_all.m3d',
+            '[metdat_temp]': f'{metdata}_{date_c}.dat',
         }
         all_replacements = {**base_replacements, **date_replacements}
 
