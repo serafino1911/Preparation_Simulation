@@ -2097,14 +2097,19 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
         continue
     fi
 
-    CALMET_DAT_BASENAME=$(basename \"${{CALMET_DAT_SOURCE}}\")
-    rm -f \"${{CALPUFF_DIR}}/calmet.dat\" \"${{CALPUFF_DIR}}/calmet_\"*.dat
-    if [ \"${{CALMET_LINK_MODE}}\" = \"ln -sf\" ]; then
-        ln -sf \"${{CALMET_DAT_SOURCE}}\" \"${{CALPUFF_DIR}}/${{CALMET_DAT_BASENAME}}\"
+    CALMET_DAT_BASENAME=$(basename "${{CALMET_DAT_SOURCE}}")
+    if [ -n "${{DATE_C}}" ]; then
+        CALMET_DAT_TARGET="CALMET_${{DATE_C}}.DAT"
     else
-        cp  \"${{CALMET_DAT_SOURCE}}\" \"${{CALPUFF_DIR}}/${{CALMET_DAT_BASENAME}}\"
+        CALMET_DAT_TARGET=$(echo "${{CALMET_DAT_BASENAME}}" | tr '[:lower:]' '[:upper:]')
     fi
-    echo \"Meteo associato: ${{CALMET_DAT_BASENAME}}\"
+    rm -f \"${{CALPUFF_DIR}}/calmet.dat\" \"${{CALPUFF_DIR}}/calmet_\"*.dat \"${{CALPUFF_DIR}}/CALMET_\"*.DAT
+    if [ \"${{CALMET_LINK_MODE}}\" = \"ln -sf\" ]; then
+        ln -sf "${{CALMET_DAT_SOURCE}}" "${{CALPUFF_DIR}}/${{CALMET_DAT_TARGET}}"
+    else
+        cp  "${{CALMET_DAT_SOURCE}}" "${{CALPUFF_DIR}}/${{CALMET_DAT_TARGET}}"
+    fi
+    echo "Meteo associato: ${{CALMET_DAT_TARGET}} (sorgente: ${{CALMET_DAT_BASENAME}})"
 
     cd \"${{CALPUFF_DIR}}\"
     RUN_LOG=\"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}.log\"
@@ -2365,10 +2370,10 @@ if [ ${{#INP_FILES[@]}} -eq 0 ]; then
     exit 10
 fi
 
-if [ -x \"${{CALPOST_DIR}}/calpost.exe\" ]; then
-    CALPOST_EXE=\"${{CALPOST_DIR}}/calpost.exe\"
+if [ -x \"${{CALPOST_DIR}}/calpost.x\" ]; then
+    CALPOST_EXE=\"${{CALPOST_DIR}}/calpost.x\"
 else
-    mapfile -t CALPOST_EXE_CANDIDATES < <(find \"${{CALPOST_DIR}}\" -maxdepth 1 -type f -name \"calpost*.exe\" | sort)
+    mapfile -t CALPOST_EXE_CANDIDATES < <(find \"${{CALPOST_DIR}}\" -maxdepth 1 -type f -name \"calpost*.x\" | sort)
     if [ ${{#CALPOST_EXE_CANDIDATES[@]}} -eq 0 ]; then
         echo \"ERRORE: eseguibile CALPOST non trovato in ${{CALPOST_DIR}}\"
         exit 11

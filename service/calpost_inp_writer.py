@@ -212,7 +212,7 @@ def generate_daily_calpost_files(
     units_output = _map_calpuff_to_calpost_units(calpuff_iprtu)
 
     # Nome base dei file di output CALPUFF (assumo siano generati con nome standard)
-    calpuff_output_base = calpuff_config.get('calpuff_output', 'calpuff')
+    calpuff_output_base = calpuff_config.get('calpuff_output', 'CALPUFFOUTPUT')
 
     created_files: list[Path] = []
     current_date = start_date
