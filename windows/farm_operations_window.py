@@ -703,7 +703,6 @@ class FarmOperationsWindow:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante l'esecuzione:\n\n{str(e)}")
     
-    
     def prepare_geographic(self):
         """Prepara i dati geografici copiando le cartelle necessarie"""
         if not PARAMIKO_AVAILABLE:
@@ -2384,21 +2383,28 @@ fi
 echo \"Eseguibile CALPOST: ${{CALPOST_EXE}}\"
 echo \"File INP trovati: ${{#INP_FILES[@]}}\"
 
-if [ -d \"${{CALPUFF_DIR}}\" ]; then
-    cp -f \"${{CALPUFF_DIR}}\"/*.CON \"${{CALPOST_DIR}}\"/ 2>/dev/null || true
-fi
-if [ -d \"${{CALPUFF_DATA_DIR}}\" ]; then
-    cp -f \"${{CALPUFF_DATA_DIR}}\"/*.CON \"${{CALPOST_DIR}}\"/ 2>/dev/null || true
-fi
-
 for INP_FILE in \"${{INP_FILES[@]}}\"; do
     INP_NAME=$(basename \"${{INP_FILE}}\")
     INP_BASENAME=\"${{INP_NAME%.inp}}\"
+
+    WANTED_DATE=\"\"
+    if [[ \"${{INP_BASENAME}}\" =~ ([0-9]{{8}}) ]]; then
+        WANTED_DATE=\"${{BASH_REMATCH[1]}}\"
+    fi
 
     echo \"--------------------------------------------------\"
     echo \"Elaborazione: ${{INP_NAME}}\"
 
     cp \"${{INP_FILE}}\" \"${{CALPOST_DIR}}/calpost.inp\"
+
+    if [ -z \"${{WANTED_DATE}}\" ]; then
+        echo \"⚠ WARNING: data non trovata nel nome file ${{INP_NAME}}, skip copia CON\"
+        rm -f \"${{CALPOST_DIR}}\"/CALPUFF*.CON \"${{CALPOST_DIR}}\"/calmet.dat \"${{CALPOST_DIR}}\"/calmet_*.dat
+    elif compgen -G \"${{CALPOST_DIR}}/*${{WANTED_DATE}}*.CON\" > /dev/null; then
+        echo \"✓ File CON per ${{WANTED_DATE}} già presente in ${{CALPOST_DIR}}\"
+    elif [ -d \"${{CALPUFF_DATA_DIR}}\" ]; then
+        cp -f \"${{CALPUFF_DATA_DIR}}\"/*${{WANTED_DATE}}*.CON \"${{CALPOST_DIR}}\"/ 2>/dev/null || true
+    fi
 
     cd \"${{CALPOST_DIR}}\"
     RUN_LOG=\"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}.log\"
@@ -2413,11 +2419,13 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
         for OUTPUT_FILE in CALPOST_*.LST *.CSV *.GRD *.ASC *.DAT; do
             if [ -f \"${{OUTPUT_FILE}}\" ]; then
                 cp -f \"${{OUTPUT_FILE}}\" \"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}_${{OUTPUT_FILE}}\"
+                rm -f \"${{OUTPUT_FILE}}\"
             fi
         done
         echo \"✓ Completato: ${{INP_NAME}}\"
     fi
 done
+rm -f \"${{CALPOST_DIR}}\"/CALPUFF*.CON \"${{CALPOST_DIR}}\"/calmet.dat \"${{CALPOST_DIR}}\"/calmet_*.dat
 
 echo \"=== Batch CALPOST completato ===\"
 """

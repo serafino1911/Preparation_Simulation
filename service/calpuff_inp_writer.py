@@ -396,7 +396,7 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     
     
     #AREA EMISSION
-    NAR1 = len(AREA_NAMES)
+    NAR1 = len(AREA_NAMES) if AREA_NAMES[0] != 'DUMMY.DAT' else 0
     file_calpuff = ff.sobstituter(file_calpuff, '[NAR1]', NAR1)   
     file_calpuff = ff.sobstituter(file_calpuff, '[IARU]', IARU)   
     NARDAT = len(AREA_NAMES)  
@@ -569,6 +569,8 @@ def emission_constant_stringer(emission_constant : list, go: bool) -> str:
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
     return end_string
 
 def emission_volume_stringer(emission_constant : list, go: bool) -> str:
@@ -581,6 +583,8 @@ def emission_volume_stringer(emission_constant : list, go: bool) -> str:
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
     return end_string
 
 def emission_geom_stringer_road(emission_constant : list, go: bool) -> str:
@@ -593,6 +597,8 @@ def emission_geom_stringer_road(emission_constant : list, go: bool) -> str:
             end_string += f' {i+1}    ! XYZ = {point[0]}, {point[1]}, {point[2]} ! !END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
     return end_string
 
 
@@ -608,6 +614,8 @@ def emission_geom_stringer_areal(emission_constant : list, go: bool, go2: bool =
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
         if go2:
             end_string = end_string.replace('*', '!')
     return end_string
@@ -622,6 +630,8 @@ def emission_line_stringer(emission_constant : list, go: bool) -> str:
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
     return end_string
 
 
@@ -634,6 +644,8 @@ def emission_road_stringer(emission_constant : list, go :bool) -> str:
         end_string += f'{i+1} ! X = {dicti["Effect_height"]}, {dicti["initial_sigma_z"]}, {dicti["initial_sigma_y"]}, {rato} ! !END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
     return end_string
 
 def emission_constant_stringer_areal(emission_constant : list, go: bool, go2: bool = False) -> str:
@@ -649,6 +661,8 @@ def emission_constant_stringer_areal(emission_constant : list, go: bool, go2: bo
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
         if go2:
             end_string = end_string.replace('*', '!')
     return end_string
@@ -659,6 +673,8 @@ def emission_scalefactor_stringer(emission_scalefactor : list, go :bool, go2: bo
         end_string += f'{i+1}  ! SCALEFACTOR  =  {dicti["source_name"]},         {dicti["pollutant"]},       {dicti["scaling_factor"]}              !  !END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
+        if not TABELLA:
+            return end_string
         if go2:
             end_string = end_string.replace('*', '!')
     return end_string

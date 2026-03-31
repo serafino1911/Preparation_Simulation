@@ -37,20 +37,6 @@ FORMAT = 2 #1=.DAT 2=.CSV 3=.GRD 4=.ASC
 UNITS_OUTPUT = 3 #conc_dep: 1=g/m3_g/m2/s, 2=mg/m3_mg/m2/s, 3=ug/m3_ug/m2/s, 4=ng/m3_ng/m2/s, 5=odor_-, 6=TBq/m3, 7=GBq/m3, 8=Bq/m3
 
 
-def _map_calpuff_to_calpost_units(calpuff_iprtu: int) -> int:
-    """Mappa le unità CALPUFF IPRTU alle corrispondenti unità CALPOST."""
-    mapping = {
-        1: 1,  # g/m3_g/m2/s
-        2: 2,  # mg/m3_mg/m2/s
-        3: 3,  # ug/m3_ug/m2/s
-        4: 4,  # ng/m3_ng/m2/s
-        5: 5,  # odor_-
-        6: 6,  # TBq/m3
-        7: 7,  # GBq/m3
-        8: 8,  # Bq/m3
-    }
-    return mapping.get(calpuff_iprtu, 3)
-
 def calpost_writer(calpuff_name: str, j: int, start_date: str, output_folder: str = 'CALPOST', species: list[str] = None, units_output: int = None, format_type: int = None) -> str:
     '''
     Scrive il file .inp per CALPOST per una specifica ora e periodo.
@@ -208,8 +194,7 @@ def generate_daily_calpost_files(
     species_list = list(species_dict.keys())
 
     # Mappa IPRTU da CALPUFF (o CALMET) a unità CALPOST
-    calpuff_iprtu = calpuff_config.get('iprtu') or calmet_config.get('iprtu', 3)
-    units_output = _map_calpuff_to_calpost_units(calpuff_iprtu)
+    units_output= calpuff_config.get('iprtu')
 
     # Nome base dei file di output CALPUFF (assumo siano generati con nome standard)
     calpuff_output_base = calpuff_config.get('calpuff_output', 'CALPUFFOUTPUT')

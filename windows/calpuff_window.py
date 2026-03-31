@@ -73,7 +73,7 @@ class CalpuffWindow:
                 # Base config
                 self.num_periods.set(data.get('num_periods', 24))
                 self.ioutu.set(data.get('ioutu', 1))
-                self.iprtu.set(data.get('iprtu', 3))
+                self.iprtu.set(data.get('iprtu', 0))
                 
                 # Point emissions
                 self.iptu.set(data.get('iptu', 1))
@@ -159,7 +159,7 @@ class CalpuffWindow:
         
         ttk.Label(base_frame, text="IPRTU (Altre unità Output):").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Combobox(base_frame, textvariable=self.iprtu, 
-                    values=[1, 2, 3, 4, 5, 6, 7, 8], state='readonly', width=13).grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
+                    values=[0, 1, 2, 3, 4], state='readonly', width=13).grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
         
         # === SEZIONE SPECIES ===
         species_frame = ttk.LabelFrame(scrollable_frame, text="Configurazione Species", padding="10")
