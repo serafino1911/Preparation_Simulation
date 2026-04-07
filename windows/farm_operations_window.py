@@ -2123,10 +2123,17 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
         for OUTPUT_FILE in CALPUFFOUTPUT_*.* RESTART*.DAT; do
             if [ -f \"${{OUTPUT_FILE}}\" ]; then
                 cp -f \"${{OUTPUT_FILE}}\" \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\"
-                rm -f CALPUFFOUTPUT_*.*
+                sleep 2
+            fi
+        for OUTPUT_FILE in CALPUFFOUTPUT_*.* RESTART*.DAT; do
+            if [ -f \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\" ]; then
+                rm -f \"${{OUTPUT_FILE}}\"
+                sleep 2
             fi
         done
         echo \"✓ Completato: ${{INP_NAME}}\"
+        sleep 2
+
     fi
 done
 

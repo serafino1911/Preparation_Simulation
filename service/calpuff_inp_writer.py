@@ -385,10 +385,11 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     file_calpuff = ff.sobstituter(file_calpuff, '[NPTDAT]', NPTDAT)   
     file_calpuff = ff.sobstituter(file_calpuff, '[string_point_name]', string_point_name)   
     file_calpuff = ff.sobstituter(file_calpuff, '[NPT2]', NPT2)   
-    NSPT1 = len(scal_fact_punt_sor)  
+    NSPT1 = len(scal_fact_punt_sor)  if TABELLA else 0
     file_calpuff = ff.sobstituter(file_calpuff, '[NSPT1]', NSPT1)   
     is_here_point_true  = NPT1 >=1
-    stinga_emission_constant = emission_constant_stringer(Puntual_Emission, is_here_point_true)  
+    stinga_emission_constant = emission_constant_stringer(Puntual_Emission, is_here_point_true) 
+
     string_scaling_factors_point = emission_scalefactor_stringer(scal_fact_punt_sor, is_here_point_true)  
     
     file_calpuff=ff.sobstituter(file_calpuff, '[STRINGS_EMISSIONS_CONSTANT]', stinga_emission_constant)  
@@ -396,13 +397,13 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     
     
     #AREA EMISSION
-    NAR1 = len(AREA_NAMES) if AREA_NAMES[0] != 'DUMMY.DAT' else 0
+    NAR1 = len(Area_Emission) if Area_Emission else 0
     file_calpuff = ff.sobstituter(file_calpuff, '[NAR1]', NAR1)   
     file_calpuff = ff.sobstituter(file_calpuff, '[IARU]', IARU)   
     NARDAT = len(AREA_NAMES)  
     is_area_true = NARDAT > 1 or (NARDAT == 1 and AREA_NAMES[0] != 'DUMMY.DAT')  
     is_area = '!' if is_area_true else '*'  
-    is_area_inp = True if NAR1 >=1 else False
+    is_area_inp = True if Area_Emission else False
     print("is_area_true: ", is_area_true)
     print("is_area_inp: ", is_area_inp)
     print("in_area: ", is_area)
@@ -423,7 +424,7 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     file_calpuff=ff.sobstituter(file_calpuff, '[STRING_AREALI_CONSTANT]', string_areal_constant)  
     file_calpuff=ff.sobstituter(file_calpuff, '[STRING_AREA_GEOM]', string_areal_geom)  
     file_calpuff = ff.sobstituter(file_calpuff, '[NAR2]', NAR2)   
-    NSAR1 = len(scal_fact_area_sor)  
+    NSAR1 = len(scal_fact_area_sor)  if TABELLA else 0
     file_calpuff = ff.sobstituter(file_calpuff, '[NSAR1]', NSAR1)   
 
 
@@ -517,7 +518,7 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     file_calpuff = ff.sobstituter(file_calpuff, '[NFLDAT]', NFLDAT) 
     
 
-    NSFTAB = len(TABELLA_FINALE_HD)
+    NSFTAB = len(TABELLA_FINALE_HD) if TABELLA else 0
     file_calpuff = ff.sobstituter(file_calpuff, '[NSFTAB]', NSFTAB) 
 
     #DATE configuration
@@ -573,8 +574,6 @@ def emission_constant_stringer(emission_constant : list, go: bool) -> str:
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
-        if not TABELLA:
-            return end_string
     return end_string
 
 def emission_volume_stringer(emission_constant : list, go: bool) -> str:
@@ -605,7 +604,6 @@ def emission_geom_stringer_road(emission_constant : list, go: bool) -> str:
             return end_string
     return end_string
 
-
 def emission_geom_stringer_areal(emission_constant : list, go: bool, go2: bool = False) -> str:
     end_string = ""
     for i, dicti in enumerate(emission_constant):
@@ -634,10 +632,7 @@ def emission_line_stringer(emission_constant : list, go: bool) -> str:
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
-        if not TABELLA:
-            return end_string
     return end_string
-
 
 def emission_road_stringer(emission_constant : list, go :bool) -> str:
     end_string = ""
@@ -665,8 +660,6 @@ def emission_constant_stringer_areal(emission_constant : list, go: bool, go2: bo
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')
-        if not TABELLA:
-            return end_string
         if go2:
             end_string = end_string.replace('*', '!')
     return end_string
@@ -681,6 +674,8 @@ def emission_scalefactor_stringer(emission_scalefactor : list, go :bool, go2: bo
             return end_string
         if go2:
             end_string = end_string.replace('*', '!')
+    if not TABELLA:
+        end_string = end_string.replace('!', '*')
     return end_string
 
 def table_going() -> str:

@@ -557,6 +557,28 @@ class ScalingFactorsWindow:
         # Rimuovi il fattore
         factor_index = factor.get('index')
         self.scaling_factors.pop(self.selected_factor_index)
+
+        # Rimuovi tutte le associazioni sorgente-inquinante collegate al fattore
+        self.scal_fact_punt_sor = [
+            assoc for assoc in self.scal_fact_punt_sor
+            if assoc.get('scaling_factor') != factor_name
+        ]
+        self.scal_fact_area_sor = [
+            assoc for assoc in self.scal_fact_area_sor
+            if assoc.get('scaling_factor') != factor_name
+        ]
+        self.scal_fact_vol_sor = [
+            assoc for assoc in self.scal_fact_vol_sor
+            if assoc.get('scaling_factor') != factor_name
+        ]
+        self.scal_fact_road_sor = [
+            assoc for assoc in self.scal_fact_road_sor
+            if assoc.get('scaling_factor') != factor_name
+        ]
+        self.scal_fact_line_sor = [
+            assoc for assoc in self.scal_fact_line_sor
+            if assoc.get('scaling_factor') != factor_name
+        ]
         
         # Rimuovi i dati associati
         for data_type in self.scaling_data:
@@ -569,6 +591,7 @@ class ScalingFactorsWindow:
         
         self.selected_factor_index = None
         self.refresh_factors_list()
+        self.assoc_listbox.delete(0, tk.END)
         
         # Pulisci l'editor
         for widget in self.edit_inner_frame.winfo_children():

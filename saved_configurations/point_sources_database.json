@@ -12,5 +12,35 @@
         "emis_rates": [
             8.25
         ]
+    },
+    "P2": {
+        "source_name": "P2",
+        "coord_x": 517.408,
+        "coord_y": 4908.802,
+        "height": 10.0,
+        "base_elev": 2.0,
+        "diam": 1.0,
+        "vel": 10.0,
+        "temp": 30.0,
+        "flag_bldg": 0,
+        "emis_rates": [
+            8.0,
+            0.2
+        ]
+    },
+    "P1": {
+        "source_name": "P1",
+        "coord_x": 517.419,
+        "coord_y": 4905.066,
+        "height": 10.0,
+        "base_elev": 0.0,
+        "diam": 1.25,
+        "vel": 60.0,
+        "temp": 25.0,
+        "flag_bldg": 0,
+        "emis_rates": [
+            8.25,
+            0.434
+        ]
     }
 }
