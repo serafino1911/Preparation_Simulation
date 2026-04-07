@@ -5,6 +5,7 @@ Finestra per la configurazione delle sorgenti stradali (Road Sources) in CALPUFF
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json
+import math
 from pathlib import Path
 
 # Import opzionali per la mappa
@@ -398,6 +399,7 @@ class RoadSourceEditor:
                 with open(domain_config, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     origin = data.get('grid_origin', {})
+                    grid_step = data.get('grid_step', {})
                     zona_utm = data.get('zona_utm', '32N')
                     vertices = data.get('vertices', {})
                     
@@ -406,7 +408,11 @@ class RoadSourceEditor:
                             'lat': origin['lat'],
                             'lon': origin['lon'],
                             'zona_utm': zona_utm,
-                            'vertices': vertices
+                            'vertices': vertices,
+                            'grid_step': grid_step.get('value'),
+                            'grid_step_unit': grid_step.get('unit', 'km'),
+                            'nx': origin.get('nx'),
+                            'ny': origin.get('ny')
                         }
             except Exception as e:
                 print(f"Errore caricamento origine dominio: {e}")
@@ -557,6 +563,7 @@ class RoadSourceEditor:
             self.road_path = None
             self.domain_polygon = None
             self.point_markers = []
+            self.grid_paths = []
             
             # Inizializza mappa dopo un breve ritardo
             self.dialog.after(500, self.initialize_map_with_domain)
@@ -780,6 +787,8 @@ class RoadSourceEditor:
         # Disegna il dominio se disponibile
         if self.domain_origin and self.domain_origin.get('vertices'):
             self.draw_domain_polygon()
+
+        self.draw_grid_overlay()
         
         # Disegna i punti esistenti
         if self.points:
@@ -826,6 +835,99 @@ class RoadSourceEditor:
                 
         except Exception as e:
             print(f"Errore nel disegno del dominio: {e}")
+
+    def km_to_degree_steps(self, step_km, reference_lat):
+        """Converte un passo in km in delta lat/lon approssimati."""
+        lat_step = step_km / 110.574
+        cos_lat = abs(math.cos(math.radians(reference_lat)))
+        if cos_lat < 1e-6:
+            cos_lat = 1e-6
+        lon_step = step_km / (111.320 * cos_lat)
+        return lat_step, lon_step
+
+    def draw_grid_overlay(self):
+        """Disegna la griglia del dominio sulla mappa, se disponibile."""
+        if not MAPVIEW_AVAILABLE or not hasattr(self, 'map_widget') or not self.domain_origin:
+            return
+
+        for path in getattr(self, 'grid_paths', []):
+            try:
+                path.delete()
+            except Exception:
+                pass
+        self.grid_paths = []
+
+        origin_lat = self.domain_origin.get('lat')
+        origin_lon = self.domain_origin.get('lon')
+        step_value = self.domain_origin.get('grid_step')
+        nx = self.domain_origin.get('nx')
+        ny = self.domain_origin.get('ny')
+
+        if None in (origin_lat, origin_lon, step_value, nx, ny):
+            return
+
+        try:
+            origin_lat = float(origin_lat)
+            origin_lon = float(origin_lon)
+            step_value = float(step_value)
+            nx = int(nx)
+            ny = int(ny)
+        except (TypeError, ValueError):
+            return
+
+        if step_value <= 0 or nx <= 0 or ny <= 0:
+            return
+
+        unit = self.domain_origin.get('grid_step_unit', 'km')
+        zona_utm = self.domain_origin.get('zona_utm', '32N')
+        grid_lines = []
+
+        if unit == 'km':
+            origin_x_km, origin_y_km = self.lat_lon_to_km(origin_lat, origin_lon)
+
+            if origin_x_km is not None and origin_y_km is not None:
+                max_x_km = origin_x_km + (nx * step_value)
+                max_y_km = origin_y_km + (ny * step_value)
+
+                for ix in range(nx + 1):
+                    current_x_km = origin_x_km + (ix * step_value)
+                    start = self.km_to_lat_lon(current_x_km, origin_y_km, zona_utm)
+                    end = self.km_to_lat_lon(current_x_km, max_y_km, zona_utm)
+                    if None not in start and None not in end:
+                        grid_lines.append([start, end])
+
+                for iy in range(ny + 1):
+                    current_y_km = origin_y_km + (iy * step_value)
+                    start = self.km_to_lat_lon(origin_x_km, current_y_km, zona_utm)
+                    end = self.km_to_lat_lon(max_x_km, current_y_km, zona_utm)
+                    if None not in start and None not in end:
+                        grid_lines.append([start, end])
+
+        if not grid_lines:
+            if unit == 'km':
+                lat_step, lon_step = self.km_to_degree_steps(step_value, origin_lat)
+            else:
+                lat_step = step_value
+                lon_step = step_value
+
+            max_lat = origin_lat + (ny * lat_step)
+            max_lon = origin_lon + (nx * lon_step)
+
+            for ix in range(nx + 1):
+                current_lon = origin_lon + (ix * lon_step)
+                grid_lines.append([(origin_lat, current_lon), (max_lat, current_lon)])
+
+            for iy in range(ny + 1):
+                current_lat = origin_lat + (iy * lat_step)
+                grid_lines.append([(current_lat, origin_lon), (current_lat, max_lon)])
+
+        for line_coords in grid_lines:
+            path = self.map_widget.set_path(
+                line_coords,
+                color="#1E90FF",
+                width=1
+            )
+            self.grid_paths.append(path)
     
     def update_map(self):
         """Aggiorna la visualizzazione della strada sulla mappa"""

@@ -5,6 +5,7 @@ Finestra per la definizione del dominio geografico
 import tkinter as tk
 from tkinter import ttk, messagebox
 import json
+import math
 import os
 try:
     import tkintermapview
@@ -46,21 +47,65 @@ class DomainWindow:
         self.origin_lon = tk.DoubleVar(value=9.0)
         self.nx = tk.IntVar(value=100)
         self.ny = tk.IntVar(value=100)
+
+        # Se presente, carica una configurazione dominio già salvata
+        self.load_existing_domain_config()
         
-        # Markers sulla mappa
+        # Elementi grafici sulla mappa
         self.map_markers = {}
         self.map_polygons = []
+        self.map_paths = []
         
         # Flag per evitare loop infiniti nei callback
         self.updating_vertices = False
         
         self.setup_ui()
         
-        # Aggiungi callback per aggiornare la mappa quando cambia l'origine
-        self.origin_lat.trace_add('write', lambda *args: self.window.after(100, self.update_map))
-        self.origin_lon.trace_add('write', lambda *args: self.window.after(100, self.update_map))
+        # Aggiorna la mappa quando cambiano origine o parametri della griglia
+        for var in (self.origin_lat, self.origin_lon, self.grid_step, self.grid_step_unit, self.nx, self.ny):
+            var.trace_add('write', lambda *args: self.window.after(100, self.update_map))
         
         self.update_map()
+
+    def load_existing_domain_config(self):
+        """Carica i parametri del dominio da `domain_config.json` se presente."""
+        config_file = self.temp_dir / 'domain_config.json'
+        if not config_file.exists():
+            return
+
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                domain_data = json.load(f)
+
+            vertices = domain_data.get('vertices', {})
+            for key in ('NW', 'NE', 'SE', 'SW'):
+                vertex_data = vertices.get(key)
+                if not vertex_data:
+                    continue
+                self.vertices[key]['lat'] = float(vertex_data.get('lat', self.vertices[key]['lat']))
+                self.vertices[key]['lon'] = float(vertex_data.get('lon', self.vertices[key]['lon']))
+
+            grid_step = domain_data.get('grid_step', {})
+            if 'value' in grid_step:
+                self.grid_step.set(str(grid_step['value']))
+            if 'unit' in grid_step:
+                self.grid_step_unit.set(grid_step['unit'])
+
+            grid_origin = domain_data.get('grid_origin', {})
+            if 'lat' in grid_origin:
+                self.origin_lat.set(float(grid_origin['lat']))
+            if 'lon' in grid_origin:
+                self.origin_lon.set(float(grid_origin['lon']))
+            if 'nx' in grid_origin:
+                self.nx.set(int(grid_origin['nx']))
+            if 'ny' in grid_origin:
+                self.ny.set(int(grid_origin['ny']))
+
+        except Exception as e:
+            messagebox.showwarning(
+                "Avviso",
+                f"Impossibile caricare il dominio salvato da {config_file}:\n{str(e)}"
+            )
     
     def setup_ui(self):
         """Configura l'interfaccia della finestra"""
@@ -262,13 +307,112 @@ class DomainWindow:
             messagebox.showerror("Errore", "Inserire valori numerici validi per latitudine e longitudine")
             return False
     
+    def km_to_degree_steps(self, step_km, reference_lat):
+        """Converte un passo in km in delta lat/lon approssimati."""
+        lat_step = step_km / 110.574
+        cos_lat = abs(math.cos(math.radians(reference_lat)))
+        if cos_lat < 1e-6:
+            cos_lat = 1e-6
+        lon_step = step_km / (111.320 * cos_lat)
+        return lat_step, lon_step
+
+    def utm_to_lat_lon(self, zona_utm, km_x, km_y):
+        """Converte coordinate UTM (km) in lat/lon."""
+        if not PYPROJ_AVAILABLE or not zona_utm:
+            return None, None
+
+        try:
+            zone_number = int(zona_utm[:-1])
+            hemisphere = zona_utm[-1].upper()
+
+            if hemisphere == 'N':
+                epsg_code = 32600 + zone_number
+            else:
+                epsg_code = 32700 + zone_number
+
+            transformer = Transformer.from_crs(
+                f"EPSG:{epsg_code}",
+                "EPSG:4326",
+                always_xy=True
+            )
+            lon, lat = transformer.transform(km_x * 1000.0, km_y * 1000.0)
+            return lat, lon
+
+        except Exception as e:
+            print(f"Errore nella conversione da UTM a lat/lon: {e}")
+            return None, None
+
+    def draw_grid_overlay(self):
+        """Disegna la griglia sulla mappa quando i parametri sono completi."""
+        try:
+            origin_lat = float(self.origin_lat.get())
+            origin_lon = float(self.origin_lon.get())
+            step_value = float(self.grid_step.get())
+            nx = int(self.nx.get())
+            ny = int(self.ny.get())
+        except (tk.TclError, ValueError):
+            return
+
+        if step_value <= 0 or nx <= 0 or ny <= 0:
+            return
+
+        unit = self.grid_step_unit.get()
+        grid_lines = []
+
+        if unit == 'km':
+            zona_utm, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon)
+
+            if zona_utm and origin_km_x is not None and origin_km_y is not None:
+                max_km_x = origin_km_x + (nx * step_value)
+                max_km_y = origin_km_y + (ny * step_value)
+
+                for ix in range(nx + 1):
+                    current_km_x = origin_km_x + (ix * step_value)
+                    start = self.utm_to_lat_lon(zona_utm, current_km_x, origin_km_y)
+                    end = self.utm_to_lat_lon(zona_utm, current_km_x, max_km_y)
+                    if None not in start and None not in end:
+                        grid_lines.append([start, end])
+
+                for iy in range(ny + 1):
+                    current_km_y = origin_km_y + (iy * step_value)
+                    start = self.utm_to_lat_lon(zona_utm, origin_km_x, current_km_y)
+                    end = self.utm_to_lat_lon(zona_utm, max_km_x, current_km_y)
+                    if None not in start and None not in end:
+                        grid_lines.append([start, end])
+
+        if not grid_lines:
+            if unit == 'km':
+                lat_step, lon_step = self.km_to_degree_steps(step_value, origin_lat)
+            else:
+                lat_step = step_value
+                lon_step = step_value
+
+            max_lat = origin_lat + (ny * lat_step)
+            max_lon = origin_lon + (nx * lon_step)
+
+            for ix in range(nx + 1):
+                current_lon = origin_lon + (ix * lon_step)
+                grid_lines.append([(origin_lat, current_lon), (max_lat, current_lon)])
+
+            for iy in range(ny + 1):
+                current_lat = origin_lat + (iy * lat_step)
+                grid_lines.append([(current_lat, origin_lon), (current_lat, max_lon)])
+
+        for line_coords in grid_lines:
+            path = self.map_widget.set_path(
+                line_coords,
+                color="#1E90FF",
+                width=1,
+                name="grid_overlay"
+            )
+            self.map_paths.append(path)
+
     def update_map(self):
         """Aggiorna la mappa con i vertici correnti"""
         if not self.update_vertices_from_ui():
             return
         
         if self.map_widget is None:
-            messagebox.showinfo("Info", "Mappa non disponibile. Installa tkintermapview.")
             return
         
         try:
@@ -291,6 +435,11 @@ class DomainWindow:
             for polygon in self.map_polygons:
                 polygon.delete()
             self.map_polygons.clear()
+
+            # Rimuovi le linee della griglia precedenti
+            for path in self.map_paths:
+                path.delete()
+            self.map_paths.clear()
             
             # Aggiungi i vertici come marker
             for key, vertex in self.vertices.items():
@@ -330,6 +479,9 @@ class DomainWindow:
                 name="domain_boundary"
             )
             self.map_polygons.append(polygon)
+
+            # Disegna la griglia se i parametri sono disponibili
+            self.draw_grid_overlay()
             
             print("Mappa aggiornata con successo")
             

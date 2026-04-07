@@ -73,7 +73,7 @@ class CalpuffWindow:
                 # Base config
                 self.num_periods.set(data.get('num_periods', 24))
                 self.ioutu.set(data.get('ioutu', 1))
-                self.iprtu.set(data.get('iprtu', 0))
+                self.iprtu.set(data.get('iprtu', 1))
                 
                 # Point emissions
                 self.iptu.set(data.get('iptu', 1))

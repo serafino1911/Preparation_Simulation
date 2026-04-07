@@ -2498,11 +2498,268 @@ echo \"=== Batch CALPOST completato ===\"
                 pass
     
     def launch_aggreg(self):
-        """Lancia aggregazione dati - DA IMPLEMENTARE"""
+        """Organizza i CSV di CALPOST in sottocartelle per parametro"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        calmet_config_path = self.temp_dir / "calmet_config.json"
+        if not calmet_config_path.exists():
+            messagebox.showerror(
+                "Errore",
+                "Configurazione CALMET non trovata.\n\n"
+                "Apri la finestra CALMET e salva la configurazione prima di lanciare l'aggregazione."
+            )
+            return
+
+        try:
+            with open(calmet_config_path, 'r', encoding='utf-8') as config_file:
+                calmet_config = json.load(config_file)
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile leggere calmet_config.json:\n\n{e}")
+            return
+
+        calpost_data = str(calmet_config.get('calpost_data', 'CALPOSTDATA')).strip() or 'CALPOSTDATA'
+
+        aggregation_choice = messagebox.askyesnocancel(
+            "Modalità Aggregazione",
+            "Come vuoi aggregare i file CSV prodotti da CALPOST?\n\n"
+            "Sì = copia i file in una nuova cartella\n"
+            "No = crea link simbolici nella nuova cartella\n"
+            "Annulla = interrompi l'operazione"
+        )
+
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch Aggreg")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch Aggreg da implementare")
+
+        if aggregation_choice is None:
+            self.log_message("Operazione annullata dall'utente.")
+            return
+
+        use_links = not aggregation_choice
+        aggregation_mode = "link simbolici" if use_links else "copia file"
+
+        self.log_message(f"cartella sorgente CALPOST: {calpost_data}")
+        self.log_message(f"Modalità aggregazione: {aggregation_mode}")
+        self.log_message("Cartella destinazione: AGGREG/<PARAMETRO>")
+
+        thread = threading.Thread(
+            target=self._launch_aggreg_thread,
+            args=(calpost_data, use_links)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _launch_aggreg_thread(self, calpost_data, use_links=False):
+        """Thread per aggregare i CSV CALPOST in sottocartelle per parametro"""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            calpost_data_dir = f"{work_folder}/{calpost_data}"
+            aggregate_root_dir = f"{work_folder}/AGGREG"
+            mode_value = "link" if use_links else "copy"
+            source_dir_literal = json.dumps(calpost_data_dir)
+            dest_root_literal = json.dumps(aggregate_root_dir)
+            mode_literal = json.dumps(mode_value)
+
+            self.log_message("Verifica cartella output CALPOST...")
+            stdin, stdout, stderr = target_client.exec_command(
+                f'test -d "{calpost_data_dir}" && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                raise RuntimeError(f"Cartella output CALPOST non trovata: {calpost_data_dir}")
+
+            self.log_message("Ricerca parametri nei file CSV CALPOST...")
+            remote_command = f"""python3 - <<'PY'
+from pathlib import Path
+import json
+import os
+import re
+import shutil
+import sys
+
+source_dir = Path({source_dir_literal})
+dest_root = Path({dest_root_literal})
+mode = {mode_literal}
+
+if not source_dir.is_dir():
+    print("ERRORE: cartella sorgente non trovata: " + str(source_dir), file=sys.stderr)
+    raise SystemExit(10)
+
+csv_files = sorted(
+    [path for path in source_dir.iterdir() if path.is_file() and path.suffix.lower() == ".csv"],
+    key=lambda path: path.name.lower()
+)
+if not csv_files:
+    print("ERRORE: nessun file CSV trovato in " + str(source_dir), file=sys.stderr)
+    raise SystemExit(11)
+
+pattern = re.compile(r"_L\\d+_([^_]+)_.*\\.csv$", re.IGNORECASE)
+counts = dict()
+skipped = []
+prepared_dirs = set()
+
+dest_root.mkdir(parents=True, exist_ok=True)
+
+for csv_file in csv_files:
+    match = pattern.search(csv_file.name)
+    if not match:
+        skipped.append(csv_file.name)
+        continue
+
+    parameter_name = match.group(1).upper()
+    parameter_dir = dest_root / parameter_name
+
+    if parameter_name not in prepared_dirs:
+        parameter_dir.mkdir(parents=True, exist_ok=True)
+        for existing_file in parameter_dir.iterdir():
+            if (existing_file.is_file() or existing_file.is_symlink()) and existing_file.suffix.lower() == ".csv":
+                existing_file.unlink()
+        prepared_dirs.add(parameter_name)
+
+    dest_file = parameter_dir / csv_file.name
+    if dest_file.exists() or dest_file.is_symlink():
+        dest_file.unlink()
+
+    if mode == "link":
+        os.symlink(str(csv_file), str(dest_file))
+    else:
+        shutil.copy2(str(csv_file), str(dest_file))
+
+    counts[parameter_name] = counts.get(parameter_name, 0) + 1
+
+if not counts:
+    print("ERRORE: nessun parametro riconosciuto nei nomi file CSV", file=sys.stderr)
+    raise SystemExit(12)
+
+print(json.dumps(dict(
+    dest_root=str(dest_root),
+    mode=mode,
+    counts=counts,
+    skipped=skipped,
+    total_csv=len(csv_files),
+    matched_csv=sum(counts.values())
+)))
+PY"""
+
+            stdin, stdout, stderr = target_client.exec_command(remote_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output aggregazione:\n{output}")
+            if error:
+                self.log_message(f"Stderr aggregazione:\n{error}")
+
+            if exit_status != 0:
+                raise RuntimeError(error or f"Aggregazione fallita con exit code {exit_status}")
+
+            output_lines = [line.strip() for line in output.splitlines() if line.strip()]
+            if not output_lines:
+                raise RuntimeError("Nessun riepilogo restituito dal processo di aggregazione")
+
+            try:
+                summary = json.loads(output_lines[-1])
+            except json.JSONDecodeError as decode_error:
+                raise RuntimeError(f"Riepilogo aggregazione non valido: {decode_error}") from decode_error
+
+            parameter_counts = summary.get('counts', {})
+            skipped_files = summary.get('skipped', [])
+            destination_root = summary.get('dest_root', aggregate_root_dir)
+
+            self.log_message("\n✓ Aggregazione completata con successo!")
+            self.log_message(f"Modalità: {'link simbolici' if use_links else 'copia file'}")
+            self.log_message(f"Cartella aggregata: {destination_root}")
+            self.log_message(f"CSV trovati: {summary.get('total_csv', 0)}")
+            self.log_message(f"CSV aggregati: {summary.get('matched_csv', 0)}")
+
+            for parameter_name in sorted(parameter_counts):
+                self.log_message(f"  - {parameter_name}: {parameter_counts[parameter_name]} file")
+
+            if skipped_files:
+                self.log_message(f"File saltati ({len(skipped_files)}): {', '.join(skipped_files)}")
+
+            messagebox.showinfo(
+                "Successo",
+                "Aggregazione completata con successo!\n\n"
+                f"Modalità: {'link simbolici' if use_links else 'copia file'}\n"
+                f"Parametri trovati: {len(parameter_counts)}\n"
+                f"Cartella creata: {destination_root}"
+            )
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch Aggreg:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def launch_mean(self):
         """Lancia calcolo medie - DA IMPLEMENTARE"""

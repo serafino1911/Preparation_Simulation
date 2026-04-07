@@ -559,13 +559,17 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     ff.write_inp(filename, file_calpuff)
     return out_name+'CON'
 
+def celsius_to_kelvin(temp_celsius: float) -> float:
+    return temp_celsius + 273.15
+
 def emission_constant_stringer(emission_constant : list, go: bool) -> str:
     end_string = ""
     for i, dicti in enumerate(emission_constant):
         end_string += f'{i+1} ! SRCNAM = {dicti["source_name"]} !\n' 
         rates = dicti["emis_rates"]
         rato = ", ".join([str(rate) for rate in rates])
-        end_string += f'! X = {dicti["coord_x"]}, {dicti["coord_y"]}, {dicti["height"]}, {dicti["base_elev"]}, {dicti["diam"]}, {dicti["vel"]}, {dicti["temp"]}, {dicti["flag_bldg"]}, {rato} !\n'
+
+        end_string += f'! X = {dicti["coord_x"]}, {dicti["coord_y"]}, {dicti["height"]}, {dicti["base_elev"]}, {dicti["diam"]}, {dicti["vel"]}, {celsius_to_kelvin(dicti["temp"])}, {dicti["flag_bldg"]}, {rato} !\n'
         end_string += f'!END!\n'
     if not go:
         end_string = end_string.replace('!', '*')

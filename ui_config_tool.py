@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import json
 import os
+import shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -19,7 +20,7 @@ class ConfiguratorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Configuratore Simulazioni - PM_TEN")
-        self.root.geometry("400x550")
+        self.root.geometry("400x610")
         
         # Directory per i file temporanei
         self.temp_dir = Path("temp_config")
@@ -131,6 +132,15 @@ class ConfiguratorApp:
         )
         load_config_btn.grid(row=10, column=0, pady=10)
 
+        # Bottone pulizia simulazione
+        clear_sim_btn = ttk.Button(
+            main_frame,
+            text="🗑️ Clear Simulazion",
+            command=self.clear_simulation,
+            width=30
+        )
+        clear_sim_btn.grid(row=11, column=0, pady=10)
+
         # Bottone Esci
         exit_btn = ttk.Button(
             main_frame,
@@ -138,7 +148,7 @@ class ConfiguratorApp:
             command=self.root.quit,
             width=30
         )
-        exit_btn.grid(row=11, column=0, pady=10)
+        exit_btn.grid(row=12, column=0, pady=10)
         
         # Configura il grid
         self.root.columnconfigure(0, weight=1)
@@ -179,6 +189,61 @@ class ConfiguratorApp:
         """Apre la finestra per le operazioni sul Farm"""
         from windows.farm_operations_window import FarmOperationsWindow
         FarmOperationsWindow(self.root, self.temp_dir)
+
+    def clear_simulation(self):
+        """Elimina i file temporanei e svuota le cartelle *_INP senza rimuovere le cartelle base."""
+        target_folders = [self.temp_dir, Path("Outputs")]
+        target_folders.extend(
+            sorted(
+                (folder for folder in Path(".").glob("*_INP") if folder.is_dir()),
+                key=lambda folder: folder.name.lower()
+            )
+        )
+
+        folder_names = "\n".join(f"• {folder}" for folder in target_folders)
+        should_clear = messagebox.askyesno(
+            "Conferma Pulizia",
+            "Vuoi cancellare tutti i file temporanei e svuotare le cartelle *_INP?\n\n"
+            f"Cartelle coinvolte:\n{folder_names}\n\n"
+            "Le cartelle principali verranno mantenute, ma il loro contenuto sarà rimosso."
+        )
+        if not should_clear:
+            return
+
+        deleted_files = 0
+        deleted_dirs = 0
+        errors = []
+
+        for folder in target_folders:
+            folder = Path(folder)
+            folder.mkdir(exist_ok=True)
+
+            for item in folder.iterdir():
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                        deleted_dirs += 1
+                    else:
+                        item.unlink()
+                        deleted_files += 1
+                except Exception as exc:
+                    errors.append(f"{item}: {exc}")
+
+        if errors:
+            error_details = "\n".join(errors[:10])
+            if len(errors) > 10:
+                error_details += f"\n... altri {len(errors) - 10} errori"
+            messagebox.showwarning(
+                "Pulizia completata con avvisi",
+                f"Elementi rimossi: {deleted_files} file e {deleted_dirs} cartelle.\n\n"
+                f"Alcuni elementi non sono stati eliminati:\n{error_details}"
+            )
+            return
+
+        messagebox.showinfo(
+            "Pulizia completata",
+            f"Eliminati {deleted_files} file e {deleted_dirs} cartelle dalle aree temporanee della simulazione."
+        )
     
     def save_configuration(self):
         """Salva la configurazione corrente con un nome unico"""
@@ -308,8 +373,9 @@ class ConfiguratorApp:
         listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=listbox.yview)
         
-        # Popola la listbox
-        for config in sorted(configs, key=lambda x: x['date'], reverse=True):
+        # Popola la listbox usando lo stesso ordine mostrato all'utente
+        sorted_configs = sorted(configs, key=lambda x: x['date'], reverse=True)
+        for config in sorted_configs:
             listbox.insert(tk.END, config['display'])
         
         selected_config = [None]
@@ -320,7 +386,7 @@ class ConfiguratorApp:
                 messagebox.showwarning("Attenzione", "Seleziona una configurazione!")
                 return
             
-            selected_config[0] = configs[selection[0]]
+            selected_config[0] = sorted_configs[selection[0]]
             selection_window.destroy()
         
         def on_delete():
@@ -329,7 +395,7 @@ class ConfiguratorApp:
                 messagebox.showwarning("Attenzione", "Seleziona una configurazione!")
                 return
             
-            config_to_delete = configs[selection[0]]
+            config_to_delete = sorted_configs[selection[0]]
             
             if messagebox.askyesno(
                 "Conferma",
@@ -365,6 +431,7 @@ class ConfiguratorApp:
                 files_loaded = 0
                 for file in config_folder.glob("*.json"):
                     if file.name != "metadata.json":
+                        os.path.exists(self.temp_dir) or self.temp_dir.mkdir()
                         destination = self.temp_dir / file.name
                         with open(file, 'r', encoding='utf-8') as src:
                             content = src.read()

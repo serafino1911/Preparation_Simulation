@@ -5,6 +5,7 @@ Finestra per la configurazione delle sorgenti areali (Area Sources) in CALPUFF
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import json
+import math
 from pathlib import Path
 
 # Import opzionali per la mappa
@@ -381,6 +382,7 @@ class AreaSourceEditorWindow:
                 with open(domain_config, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     origin = data.get('grid_origin', {})
+                    grid_step = data.get('grid_step', {})
                     zona_utm = data.get('zona_utm', '32N')
                     vertices = data.get('vertices', {})
                     
@@ -389,7 +391,11 @@ class AreaSourceEditorWindow:
                             'lat': origin['lat'],
                             'lon': origin['lon'],
                             'zona_utm': zona_utm,
-                            'vertices': vertices
+                            'vertices': vertices,
+                            'grid_step': grid_step.get('value'),
+                            'grid_step_unit': grid_step.get('unit', 'km'),
+                            'nx': origin.get('nx'),
+                            'ny': origin.get('ny')
                         }
             except Exception as e:
                 print(f"Errore caricamento origine dominio: {e}")
@@ -528,6 +534,7 @@ class AreaSourceEditorWindow:
             self.area_polygon = None
             self.domain_polygon = None
             self.vertex_markers = []
+            self.grid_paths = []
         else:
             ttk.Label(right_frame, 
                      text="Mappa non disponibile\n(installa tkintermapview e pyproj)",
@@ -716,6 +723,8 @@ class AreaSourceEditorWindow:
                 center_lon = sum(c[1] for c in polygon_coords) / len(polygon_coords)
                 self.map_widget.set_position(center_lat, center_lon)
                 self.map_widget.set_zoom(10)
+
+                self.draw_grid_overlay()
                 
         except Exception as e:
             print(f"Errore inizializzazione mappa con dominio: {e}")
@@ -799,6 +808,124 @@ class AreaSourceEditorWindow:
         except Exception as e:
             print(f"Errore conversione coordinate: {e}")
             return None, None
+
+    def km_to_degree_steps(self, step_km, reference_lat):
+        """Converte un passo in km in delta lat/lon approssimati."""
+        lat_step = step_km / 110.574
+        cos_lat = abs(math.cos(math.radians(reference_lat)))
+        if cos_lat < 1e-6:
+            cos_lat = 1e-6
+        lon_step = step_km / (111.320 * cos_lat)
+        return lat_step, lon_step
+
+    def utm_to_lat_lon(self, zona_utm, km_x, km_y):
+        """Converte coordinate UTM (km) in lat/lon per il disegno della griglia."""
+        if not PYPROJ_AVAILABLE or not zona_utm:
+            return None, None
+
+        try:
+            utm_zone = int(zona_utm[:-1])
+            hemisphere = 'north' if zona_utm[-1].upper() == 'N' else 'south'
+
+            crs_wgs84 = CRS.from_epsg(4326)
+            crs_utm = CRS.from_dict({
+                'proj': 'utm',
+                'zone': utm_zone,
+                'hemisphere': hemisphere,
+                'ellps': 'WGS84'
+            })
+
+            transformer = Transformer.from_crs(crs_utm, crs_wgs84, always_xy=True)
+            lon, lat = transformer.transform(km_x * 1000.0, km_y * 1000.0)
+            return lat, lon
+
+        except Exception as e:
+            print(f"Errore conversione griglia UTM -> lat/lon: {e}")
+            return None, None
+
+    def draw_grid_overlay(self):
+        """Disegna la griglia del dominio sulla mappa, se disponibile."""
+        if not MAPVIEW_AVAILABLE or not self.domain_origin or not hasattr(self, 'map_widget'):
+            return
+
+        for path in getattr(self, 'grid_paths', []):
+            try:
+                path.delete()
+            except Exception:
+                pass
+        self.grid_paths = []
+
+        origin_lat = self.domain_origin.get('lat')
+        origin_lon = self.domain_origin.get('lon')
+        step_value = self.domain_origin.get('grid_step')
+        nx = self.domain_origin.get('nx')
+        ny = self.domain_origin.get('ny')
+
+        if None in (origin_lat, origin_lon, step_value, nx, ny):
+            return
+
+        try:
+            origin_lat = float(origin_lat)
+            origin_lon = float(origin_lon)
+            step_value = float(step_value)
+            nx = int(nx)
+            ny = int(ny)
+        except (TypeError, ValueError):
+            return
+
+        if step_value <= 0 or nx <= 0 or ny <= 0:
+            return
+
+        unit = self.domain_origin.get('grid_step_unit', 'km')
+        zona_utm = self.domain_origin.get('zona_utm', '32N')
+        grid_lines = []
+
+        if unit == 'km':
+            origin_x_km, origin_y_km = self.lat_lon_to_km(origin_lat, origin_lon)
+
+            if origin_x_km is not None and origin_y_km is not None:
+                max_x_km = origin_x_km + (nx * step_value)
+                max_y_km = origin_y_km + (ny * step_value)
+
+                for ix in range(nx + 1):
+                    current_x_km = origin_x_km + (ix * step_value)
+                    start = self.utm_to_lat_lon(zona_utm, current_x_km, origin_y_km)
+                    end = self.utm_to_lat_lon(zona_utm, current_x_km, max_y_km)
+                    if None not in start and None not in end:
+                        grid_lines.append([start, end])
+
+                for iy in range(ny + 1):
+                    current_y_km = origin_y_km + (iy * step_value)
+                    start = self.utm_to_lat_lon(zona_utm, origin_x_km, current_y_km)
+                    end = self.utm_to_lat_lon(zona_utm, max_x_km, current_y_km)
+                    if None not in start and None not in end:
+                        grid_lines.append([start, end])
+
+        if not grid_lines:
+            if unit == 'km':
+                lat_step, lon_step = self.km_to_degree_steps(step_value, origin_lat)
+            else:
+                lat_step = step_value
+                lon_step = step_value
+
+            max_lat = origin_lat + (ny * lat_step)
+            max_lon = origin_lon + (nx * lon_step)
+
+            for ix in range(nx + 1):
+                current_lon = origin_lon + (ix * lon_step)
+                grid_lines.append([(origin_lat, current_lon), (max_lat, current_lon)])
+
+            for iy in range(ny + 1):
+                current_lat = origin_lat + (iy * lat_step)
+                grid_lines.append([(current_lat, origin_lon), (current_lat, max_lon)])
+
+        for line_coords in grid_lines:
+            path = self.map_widget.set_path(
+                line_coords,
+                color="#1E90FF",
+                width=1
+            )
+            self.grid_paths.append(path)
     
     def update_map(self):
         """Aggiorna la visualizzazione del poligono sulla mappa"""
