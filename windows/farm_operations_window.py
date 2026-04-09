@@ -2120,20 +2120,31 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
         echo \"⚠ ERRORE: calpuff fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
         echo \"Continuazione con prossimo file...\"
     else
-        for OUTPUT_FILE in CALPUFFOUTPUT_*.* RESTART*.DAT; do
+        for OUTPUT_FILE in CALPUFFOUTPUT_*.*; do
             if [ -f \"${{OUTPUT_FILE}}\" ]; then
                 cp -f \"${{OUTPUT_FILE}}\" \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\"
                 sleep 2
-            fi
-        for OUTPUT_FILE in CALPUFFOUTPUT_*.* RESTART*.DAT; do
-            if [ -f \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\" ]; then
-                rm -f \"${{OUTPUT_FILE}}\"
+                if [ -f \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\" ]; then
+                    rm -f \"${{OUTPUT_FILE}}\"
+                fi
                 sleep 2
             fi
         done
         echo \"✓ Completato: ${{INP_NAME}}\"
         sleep 2
+    fi
 
+done
+
+for RESTART_FILE in "${{CALPUFF_DIR}}"/RESTART*.DAT; do
+    if [ -f "${{RESTART_FILE}}" ]; then
+        RESTART_BASENAME=$(basename "${{RESTART_FILE}}")
+        cp -f "${{RESTART_FILE}}" "${{CALPUFF_DATA_DIR}}/${{RESTART_BASENAME}}"
+        sleep 2
+        if [ -f "${{CALPUFF_DATA_DIR}}/${{RESTART_BASENAME}}" ]; then
+            rm -f "${{RESTART_FILE}}"
+        fi
+        sleep 2
     fi
 done
 
@@ -2425,7 +2436,8 @@ for INP_FILE in \"${{INP_FILES[@]}}\"; do
     else
         for OUTPUT_FILE in CALPOST_*.LST *.CSV *.GRD *.ASC *.DAT; do
             if [ -f \"${{OUTPUT_FILE}}\" ]; then
-                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}_${{OUTPUT_FILE}}\"
+                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPOST_DATA_DIR}}/${{OUTPUT_FILE}}\"
+                sleep 1
                 rm -f \"${{OUTPUT_FILE}}\"
             fi
         done
