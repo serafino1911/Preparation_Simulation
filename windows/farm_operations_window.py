@@ -3495,8 +3495,814 @@ print(json.dumps(summary, ensure_ascii=False))
                 pass
     
     def launch_percentile(self):
-        """Lancia calcolo percentili - DA IMPLEMENTARE"""
+        """Calcola percentili giornalieri/mensili/annuali dai CSV aggregati"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        post_process_path = self.temp_dir / "post_process.json"
+        saved_source_folder = "AGGREG"
+        saved_output_folder = "PERCENTILE"
+        saved_granularity = ["daily"]
+        saved_percentiles = [98.0]
+        if post_process_path.exists():
+            try:
+                with open(post_process_path, 'r', encoding='utf-8') as _f:
+                    _pp = json.load(_f)
+                saved_source_folder = str(_pp.get('percentile_source_folder', _pp.get('aggreg_folder', 'AGGREG'))).strip() or 'AGGREG'
+                saved_output_folder = str(_pp.get('percentile_output_folder', 'PERCENTILE')).strip() or 'PERCENTILE'
+                configured = _pp.get('percentile_granularity', ['daily'])
+                if isinstance(configured, list):
+                    saved_granularity = [str(item).lower() for item in configured if str(item).strip()]
+                elif isinstance(configured, str) and configured.strip():
+                    saved_granularity = [configured.strip().lower()]
+
+                configured_percentiles = _pp.get('percentile_values', [98])
+                parsed = []
+                if isinstance(configured_percentiles, list):
+                    for value in configured_percentiles:
+                        try:
+                            parsed.append(float(value))
+                        except Exception:
+                            continue
+                elif isinstance(configured_percentiles, (str, int, float)):
+                    text_value = str(configured_percentiles)
+                    for chunk in text_value.split(','):
+                        chunk = chunk.strip()
+                        if not chunk:
+                            continue
+                        try:
+                            parsed.append(float(chunk))
+                        except Exception:
+                            continue
+                cleaned = [value for value in parsed if 0 < value <= 100]
+                if cleaned:
+                    saved_percentiles = cleaned
+            except Exception:
+                pass
+
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Calcolo Percentili")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        dialog.transient(self.window)
+
+        dialog_result = {}
+
+        tk.Label(
+            dialog,
+            text="Cartella sorgente (aggregata):",
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=0, column=0, columnspan=2, sticky='w', padx=12, pady=(12, 2))
+
+        source_var = tk.StringVar(value=saved_source_folder)
+        tk.Entry(dialog, textvariable=source_var, width=32).grid(
+            row=1, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
+        )
+
+        tk.Label(
+            dialog,
+            text="Cartella destinazione percentili:",
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=2, column=0, columnspan=2, sticky='w', padx=12, pady=(2, 2))
+
+        destination_var = tk.StringVar(value=saved_output_folder)
+        tk.Entry(dialog, textvariable=destination_var, width=32).grid(
+            row=3, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
+        )
+
+        tk.Label(
+            dialog,
+            text="Granularità percentile (seleziona una o più):",
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=4, column=0, columnspan=2, sticky='w', padx=12, pady=(2, 2))
+
+        daily_var = tk.BooleanVar(value='daily' in saved_granularity)
+        monthly_var = tk.BooleanVar(value='monthly' in saved_granularity)
+        annual_var = tk.BooleanVar(value='annual' in saved_granularity)
+
+        tk.Checkbutton(dialog, text="Daily", variable=daily_var).grid(
+            row=5, column=0, sticky='w', padx=24
+        )
+        tk.Checkbutton(dialog, text="Monthly", variable=monthly_var).grid(
+            row=6, column=0, sticky='w', padx=24
+        )
+        tk.Checkbutton(dialog, text="Annual", variable=annual_var).grid(
+            row=7, column=0, sticky='w', padx=24
+        )
+
+        tk.Label(
+            dialog,
+            text="Percentili (preset + custom):",
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=8, column=0, columnspan=2, sticky='w', padx=12, pady=(8, 2))
+
+        preset_values = [90.0, 95.0, 98.0, 99.0, 100.0]
+        preset_vars = {}
+        for idx, preset in enumerate(preset_values):
+            checked = any(abs(value - preset) < 1e-6 for value in saved_percentiles)
+            var = tk.BooleanVar(value=checked)
+            preset_vars[preset] = var
+            label = f"P{int(preset) if abs(preset - int(preset)) < 1e-6 else preset:g}"
+            tk.Checkbutton(dialog, text=label, variable=var).grid(
+                row=9 + idx, column=0, sticky='w', padx=24
+            )
+
+        custom_percentiles = [
+            value for value in saved_percentiles
+            if all(abs(value - preset) >= 1e-6 for preset in preset_values)
+        ]
+        custom_var = tk.StringVar(
+            value=','.join(
+                f"{int(value)}" if abs(value - int(value)) < 1e-6 else f"{value:g}"
+                for value in custom_percentiles
+            )
+        )
+
+        tk.Label(dialog, text="Custom (es. 92,97.5,100):").grid(
+            row=13, column=0, sticky='w', padx=24, pady=(2, 0)
+        )
+        tk.Entry(dialog, textvariable=custom_var, width=24).grid(
+            row=14, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
+        )
+
+        def _normalize_percentiles(raw_values):
+            unique_values = {}
+            for value in raw_values:
+                key = f"{value:.6f}"
+                unique_values[key] = value
+            sorted_values = [unique_values[key] for key in sorted(unique_values.keys(), key=lambda item: float(item))]
+            normalized = []
+            for value in sorted_values:
+                if abs(value - int(value)) < 1e-6:
+                    normalized.append(float(int(value)))
+                else:
+                    normalized.append(round(value, 6))
+            return normalized
+
+        def _on_ok():
+            source_folder = source_var.get().strip()
+            destination_folder = destination_var.get().strip()
+            granularities = []
+            if daily_var.get():
+                granularities.append('daily')
+            if monthly_var.get():
+                granularities.append('monthly')
+            if annual_var.get():
+                granularities.append('annual')
+
+            percentile_values = []
+            for preset, preset_var in preset_vars.items():
+                if preset_var.get():
+                    percentile_values.append(float(preset))
+
+            invalid_values = []
+            custom_text = custom_var.get().strip()
+            if custom_text:
+                for chunk in custom_text.split(','):
+                    chunk = chunk.strip()
+                    if not chunk:
+                        continue
+                    try:
+                        parsed = float(chunk)
+                    except Exception:
+                        invalid_values.append(chunk)
+                        continue
+                    if not (0 < parsed <= 100):
+                        invalid_values.append(chunk)
+                        continue
+                    percentile_values.append(parsed)
+
+            if not source_folder:
+                messagebox.showerror("Errore", "La cartella sorgente non può essere vuota.", parent=dialog)
+                return
+            if not destination_folder:
+                messagebox.showerror("Errore", "La cartella destinazione non può essere vuota.", parent=dialog)
+                return
+            if not granularities:
+                messagebox.showerror("Errore", "Seleziona almeno una granularità.", parent=dialog)
+                return
+            if invalid_values:
+                messagebox.showerror(
+                    "Errore",
+                    "Valori percentile non validi: " + ", ".join(invalid_values),
+                    parent=dialog
+                )
+                return
+
+            percentile_values = [value for value in percentile_values if 0 < value <= 100]
+            percentile_values = _normalize_percentiles(percentile_values)
+            if not percentile_values:
+                messagebox.showerror("Errore", "Seleziona almeno un percentile valido.", parent=dialog)
+                return
+
+            dialog_result['source_folder'] = source_folder
+            dialog_result['destination_folder'] = destination_folder
+            dialog_result['granularities'] = granularities
+            dialog_result['percentiles'] = percentile_values
+            dialog.destroy()
+
+        def _on_cancel():
+            dialog.destroy()
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.grid(row=15, column=0, columnspan=2, pady=(8, 12))
+        tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
+        tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
+
+        self.window.wait_window(dialog)
+
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch Percentile")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch Percentile da implementare")
+
+        if not dialog_result:
+            self.log_message("Operazione annullata dall'utente.")
+            return
+
+        source_folder = dialog_result['source_folder']
+        destination_folder = dialog_result['destination_folder']
+        granularities = dialog_result['granularities']
+        percentiles = dialog_result['percentiles']
+
+        try:
+            previous = {}
+            if post_process_path.exists():
+                with open(post_process_path, 'r', encoding='utf-8') as _f:
+                    previous = json.load(_f)
+            previous['percentile_source_folder'] = source_folder
+            previous['percentile_output_folder'] = destination_folder
+            previous['percentile_granularity'] = granularities
+            previous['percentile_values'] = percentiles
+            with open(post_process_path, 'w', encoding='utf-8') as _f:
+                json.dump(previous, _f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+        def _fmt_percentile(value):
+            if abs(value - int(value)) < 1e-6:
+                return str(int(value))
+            return f"{value:g}"
+
+        self.log_message(f"Sorgente: {source_folder}")
+        self.log_message(f"Destinazione: {destination_folder}")
+        self.log_message(f"Granularità selezionate: {', '.join(granularities)}")
+        self.log_message("Percentili selezionati: " + ", ".join(f"P{_fmt_percentile(value)}" for value in percentiles))
+
+        thread = threading.Thread(
+            target=self._launch_percentile_thread,
+            args=(source_folder, destination_folder, granularities, percentiles)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _launch_percentile_thread(self, source_folder, destination_folder, granularities, percentiles):
+        """Thread per calcolare percentili dai CSV aggregati"""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            source_root = source_folder if source_folder.startswith('/') else f"{work_folder}/{source_folder}"
+            destination_root = destination_folder if destination_folder.startswith('/') else f"{work_folder}/{destination_folder}"
+
+            self.log_message("Verifica cartelle remote per il calcolo percentili...")
+            stdin, stdout, stderr = target_client.exec_command(
+                f'test -d "{source_root}" && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                raise RuntimeError(f"Cartella sorgente non trovata: {source_root}")
+
+            source_root_literal = json.dumps(source_root)
+            destination_root_literal = json.dumps(destination_root)
+            granularities_literal = json.dumps(granularities)
+            percentiles_literal = json.dumps(percentiles)
+
+            remote_script = """from pathlib import Path
+import csv
+import json
+import re
+import sys
+
+source_root = Path(__SOURCE_ROOT__)
+destination_root = Path(__DESTINATION_ROOT__)
+granularities = __GRANULARITIES__
+percentiles = __PERCENTILES__
+
+if not source_root.is_dir():
+    print("ERRORE: cartella sorgente non trovata: " + str(source_root), file=sys.stderr)
+    raise SystemExit(10)
+
+destination_root.mkdir(parents=True, exist_ok=True)
+
+time_pattern = re.compile(r"^(?P<year>\\d{4})_M(?P<month>\\d{2})_D(?P<day>\\d{2})_")
+
+
+def parse_time_key(file_name):
+    match = time_pattern.search(file_name)
+    if not match:
+        return None
+    year = match.group('year')
+    month = match.group('month')
+    day = match.group('day')
+    return dict(
+        daily=f"{year}{month}{day}",
+        monthly=f"{year}{month}",
+        annual=year,
+    )
+
+
+def is_float(value):
+    try:
+        float(value)
+        return True
+    except Exception:
+        return False
+
+
+def normalized_name(value):
+    return value.strip().lower().replace(' ', '').replace('-', '_')
+
+
+def cleaned_cell(row, column_name):
+    value = row.get(column_name, '')
+    if value is None:
+        return ''
+    return str(value).strip()
+
+
+def detect_concentration_columns(fieldnames, sample_rows):
+    receptor_like = {
+        'x', 'y', 'x_km', 'y_km', 'xkm', 'ykm',
+        'receptor', 'recettore', 'id', 'lon', 'lat', 'longitude', 'latitude'
+    }
+    value_like = {'value', 'val', 'conc', 'concentration'}
+    candidates = []
+    for col in fieldnames:
+        lowered = normalized_name(col)
+        if lowered in receptor_like:
+            continue
+        if lowered in value_like or 'conc' in lowered or 'concentration' in lowered:
+            if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
+                candidates.append(col)
+
+    if candidates:
+        return candidates
+
+    numeric_cols = []
+    for col in fieldnames:
+        lowered = normalized_name(col)
+        if lowered in receptor_like:
+            continue
+        if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
+            numeric_cols.append(col)
+
+    if numeric_cols:
+        return [numeric_cols[-1]]
+
+    return []
+
+
+def sort_key_columns(key_cols):
+    preferred = ['x_km', 'y_km', 'x', 'y', 'receptor']
+    ordered = []
+    used = set()
+    normalized_lookup = {normalized_name(col): col for col in key_cols}
+    for pref in preferred:
+        if pref in normalized_lookup:
+            ordered.append(normalized_lookup[pref])
+            used.add(normalized_lookup[pref])
+    for col in key_cols:
+        if col not in used:
+            ordered.append(col)
+    return ordered
+
+
+def period_units(granularity):
+    if granularity == 'daily':
+        return 'hours/day processed'
+    if granularity == 'monthly':
+        return 'hours/month processed'
+    return 'hours/year processed'
+
+
+def report_title(granularity, percentile):
+    if abs(percentile - int(percentile)) < 1e-6:
+        perc_label = str(int(percentile))
+    else:
+        perc_label = f"{percentile:g}"
+    return (
+        f"        1   P{perc_label} {granularity.upper()} PERCENTILE "
+        "CONCENTRATION VALUES AT EACH RECEPTOR  (g/m**3)"
+    )
+
+
+def percentile_slug(percentile):
+    if abs(percentile - int(percentile)) < 1e-6:
+        return f"p{int(percentile)}"
+    return f"p{percentile:g}".replace('.', '_')
+
+
+def compute_percentile(values, percentile):
+    if not values:
+        return None
+    ordered = sorted(values)
+    size = len(ordered)
+    if size == 1:
+        return ordered[0]
+
+    rank = (percentile / 100.0) * (size - 1)
+    lower_idx = int(rank)
+    upper_idx = min(lower_idx + 1, size - 1)
+    weight = rank - lower_idx
+    return ordered[lower_idx] * (1.0 - weight) + ordered[upper_idx] * weight
+
+
+def find_csv_header_index(lines):
+    for idx, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        columns = [normalized_name(part) for part in stripped.split(',')]
+        if 'x_km' in columns and 'y_km' in columns and 'value' in columns:
+            return idx
+    return None
+
+
+def load_csv_dataset(csv_path):
+    with csv_path.open('r', encoding='utf-8', newline='') as handle:
+        lines = handle.readlines()
+
+    header_index = find_csv_header_index(lines)
+    if header_index is None:
+        return None
+
+    csv_content = ''.join(lines[header_index:])
+    reader = csv.DictReader(csv_content.splitlines())
+    fieldnames = reader.fieldnames or []
+    rows = [
+        row for row in reader
+        if any(cleaned_cell(row, col) for col in fieldnames)
+    ]
+
+    if not fieldnames or not rows:
+        return None
+
+    concentration_cols = detect_concentration_columns(fieldnames, rows[: min(25, len(rows))])
+    if not concentration_cols:
+        return None
+
+    key_cols = sort_key_columns([col for col in fieldnames if col not in concentration_cols])
+    row_map = {}
+    for row in rows:
+        key = tuple((col, row.get(col, '')) for col in key_cols)
+        concentrations = []
+        for conc_col in concentration_cols:
+            raw_value = cleaned_cell(row, conc_col)
+            if not raw_value:
+                concentrations.append(None)
+            else:
+                try:
+                    concentrations.append(float(raw_value))
+                except Exception:
+                    concentrations.append(None)
+        row_map[key] = dict(
+            meta={col: row.get(col, '') for col in key_cols},
+            values=concentrations,
+        )
+
+    return dict(
+        fieldnames=fieldnames,
+        key_cols=key_cols,
+        concentration_cols=concentration_cols,
+        row_map=row_map,
+    )
+
+
+def merge_period(files_for_period, percentile_values):
+    datasets = []
+    warnings = []
+    skipped = []
+
+    for file_path in files_for_period:
+        dataset = load_csv_dataset(file_path)
+        if dataset is None:
+            skipped.append(file_path.name)
+            continue
+        datasets.append((file_path, dataset))
+
+    if not datasets:
+        return None, warnings, skipped
+
+    base_file, base_dataset = datasets[0]
+    concentration_cols = list(base_dataset['concentration_cols'])
+    key_cols = list(base_dataset['key_cols'])
+
+    intersection = set(base_dataset['row_map'].keys())
+    valid_datasets = [(base_file, base_dataset)]
+
+    for file_path, dataset in datasets[1:]:
+        if dataset['concentration_cols'] != concentration_cols or dataset['key_cols'] != key_cols:
+            skipped.append(file_path.name)
+            warnings.append(f"Schema non compatibile, file ignorato: {file_path.name}")
+            continue
+        intersection &= set(dataset['row_map'].keys())
+        valid_datasets.append((file_path, dataset))
+
+    if not valid_datasets:
+        return None, warnings, skipped
+
+    if len(intersection) < len(valid_datasets[0][1]['row_map']):
+        warnings.append(
+            f"Griglia non allineata: uso intersezione righe ({len(intersection)} recettori)"
+        )
+
+    ordered_keys = [k for k in valid_datasets[0][1]['row_map'].keys() if k in intersection]
+    if not ordered_keys:
+        return None, warnings, skipped
+
+    rows_by_percentile = {pct: [] for pct in percentile_values}
+    for key in ordered_keys:
+        meta = dict(valid_datasets[0][1]['row_map'][key]['meta'])
+
+        per_concentration_values = []
+        for idx, conc_col in enumerate(concentration_cols):
+            values = []
+            for _, dataset in valid_datasets:
+                value = dataset['row_map'][key]['values'][idx]
+                if value is not None:
+                    values.append(value)
+            per_concentration_values.append(values)
+
+        for pct in percentile_values:
+            output_row = dict(meta)
+            for idx, conc_col in enumerate(concentration_cols):
+                pct_value = compute_percentile(per_concentration_values[idx], pct)
+                if pct_value is None:
+                    output_row[conc_col] = ''
+                else:
+                    output_row[conc_col] = f"{pct_value:.6f}"
+            rows_by_percentile[pct].append(output_row)
+
+    fieldnames_out = key_cols + concentration_cols
+    return dict(
+        fieldnames=fieldnames_out,
+        rows_by_percentile=rows_by_percentile,
+        files_used=len(valid_datasets),
+    ), warnings, skipped
+
+
+parameter_dirs = sorted([path for path in source_root.iterdir() if path.is_dir()], key=lambda p: p.name.lower())
+if not parameter_dirs:
+    print("ERRORE: nessuna sottocartella parametro trovata in " + str(source_root), file=sys.stderr)
+    raise SystemExit(11)
+
+summary = dict(
+    source_root=str(source_root),
+    destination_root=str(destination_root),
+    requested_granularity=granularities,
+    requested_percentiles=percentiles,
+    parameters_processed=0,
+    outputs_created=0,
+    warnings=[],
+    skipped_files=[],
+    details={},
+)
+
+for parameter_dir in parameter_dirs:
+    csv_files = sorted(
+        [path for path in parameter_dir.iterdir() if path.is_file() and path.suffix.lower() == '.csv'],
+        key=lambda p: p.name.lower()
+    )
+    if not csv_files:
+        continue
+
+    parameter_name = parameter_dir.name
+    summary['parameters_processed'] += 1
+    summary['details'][parameter_name] = {}
+
+    grouped = dict(daily={}, monthly={}, annual={})
+    unparsable = []
+    for file_path in csv_files:
+        time_key = parse_time_key(file_path.name)
+        if not time_key:
+            unparsable.append(file_path.name)
+            continue
+        for gran in ('daily', 'monthly', 'annual'):
+            grouped[gran].setdefault(time_key[gran], []).append(file_path)
+
+    if unparsable:
+        summary['warnings'].append(
+            f"{parameter_name}: file con nome non riconosciuto ignorati ({len(unparsable)})"
+        )
+        summary['skipped_files'].extend(unparsable)
+
+    for granularity in granularities:
+        periods = grouped.get(granularity, {})
+        if not periods:
+            summary['warnings'].append(f"{parameter_name}/{granularity}: nessun periodo disponibile")
+            continue
+
+        granularity_dir = destination_root / parameter_name / granularity.upper()
+        granularity_dir.mkdir(parents=True, exist_ok=True)
+
+        gran_created = 0
+        for period_key in sorted(periods.keys()):
+            files_for_period = periods[period_key]
+            result, period_warnings, period_skipped = merge_period(files_for_period, percentiles)
+
+            if period_warnings:
+                for warning in period_warnings:
+                    summary['warnings'].append(
+                        f"{parameter_name}/{granularity}/{period_key}: {warning}"
+                    )
+            if period_skipped:
+                summary['skipped_files'].extend(period_skipped)
+
+            if result is None:
+                summary['warnings'].append(
+                    f"{parameter_name}/{granularity}/{period_key}: periodo saltato (dati non validi)"
+                )
+                continue
+
+            for percentile in percentiles:
+                output_name = f"percentile_{percentile_slug(percentile)}_{granularity}_{period_key}.csv"
+                output_path = granularity_dir / output_name
+                with output_path.open('w', encoding='utf-8', newline='') as out_handle:
+                    out_handle.write(report_title(granularity, percentile) + "\\n\\n")
+                    out_handle.write(f"                   {parameter_name}          1\\n")
+                    out_handle.write(f"                   ({result['files_used']} {period_units(granularity)})\\n")
+                    out_handle.write("RECEPTOR\\n")
+                    writer = csv.DictWriter(out_handle, fieldnames=result['fieldnames'], lineterminator='\\n')
+                    writer.writeheader()
+                    out_handle.write(" \\n")
+                    writer.writerows(result['rows_by_percentile'][percentile])
+
+                gran_created += 1
+                summary['outputs_created'] += 1
+
+            if granularity == 'daily' and len(files_for_period) < 24:
+                summary['warnings'].append(
+                    f"{parameter_name}/{granularity}/{period_key}: copertura oraria incompleta ({len(files_for_period)} file)"
+                )
+
+        summary['details'][parameter_name][granularity] = dict(
+            periods_found=len(periods),
+            outputs_created=gran_created,
+            percentiles=len(percentiles),
+        )
+
+summary_path = destination_root / 'percentile_summary.json'
+with summary_path.open('w', encoding='utf-8') as summary_handle:
+    json.dump(summary, summary_handle, indent=2, ensure_ascii=False)
+
+print(json.dumps(summary, ensure_ascii=False))
+"""
+            remote_script = remote_script.replace('__SOURCE_ROOT__', source_root_literal)
+            remote_script = remote_script.replace('__DESTINATION_ROOT__', destination_root_literal)
+            remote_script = remote_script.replace('__GRANULARITIES__', granularities_literal)
+            remote_script = remote_script.replace('__PERCENTILES__', percentiles_literal)
+            remote_command = "python3 - <<'PY'\n" + remote_script + "\nPY"
+
+            self.log_message("Esecuzione calcolo percentili sul server...")
+            stdin, stdout, stderr = target_client.exec_command(remote_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output percentili:\n{output}")
+            if error:
+                self.log_message(f"Stderr percentili:\n{error}")
+
+            if exit_status != 0:
+                raise RuntimeError(error or f"Calcolo percentili fallito con exit code {exit_status}")
+
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            if not lines:
+                raise RuntimeError("Nessun riepilogo restituito dal calcolo percentili")
+
+            try:
+                summary = json.loads(lines[-1])
+            except json.JSONDecodeError as decode_error:
+                raise RuntimeError(f"Riepilogo percentili non valido: {decode_error}") from decode_error
+
+            details = summary.get('details', {})
+            warnings = summary.get('warnings', [])
+            skipped = summary.get('skipped_files', [])
+            requested_percentiles = summary.get('requested_percentiles', percentiles)
+
+            def _fmt_percentile(value):
+                try:
+                    numeric_value = float(value)
+                except Exception:
+                    return str(value)
+                if abs(numeric_value - int(numeric_value)) < 1e-6:
+                    return str(int(numeric_value))
+                return f"{numeric_value:g}"
+
+            self.log_message("\n✓ Calcolo percentili completato con successo!")
+            self.log_message(f"Sorgente: {summary.get('source_root', source_root)}")
+            self.log_message(f"Destinazione: {summary.get('destination_root', destination_root)}")
+            self.log_message(
+                "Percentili calcolati: " +
+                ", ".join(f"P{_fmt_percentile(value)}" for value in requested_percentiles)
+            )
+            self.log_message(f"Parametri processati: {summary.get('parameters_processed', 0)}")
+            self.log_message(f"File output creati: {summary.get('outputs_created', 0)}")
+
+            for parameter_name in sorted(details.keys()):
+                for granularity, gran_summary in details[parameter_name].items():
+                    self.log_message(
+                        f"  - {parameter_name}/{granularity.upper()}: "
+                        f"periodi={gran_summary.get('periods_found', 0)}, "
+                        f"output={gran_summary.get('outputs_created', 0)}"
+                    )
+
+            if warnings:
+                self.log_message(f"Warning ({len(warnings)}):")
+                for warning in warnings[:20]:
+                    self.log_message(f"  * {warning}")
+                if len(warnings) > 20:
+                    self.log_message(f"  * ... altri {len(warnings) - 20} warning")
+
+            if skipped:
+                self.log_message(f"File saltati: {len(skipped)}")
+
+            messagebox.showinfo(
+                "Successo",
+                "Calcolo percentili completato!\n\n"
+                f"Parametri processati: {summary.get('parameters_processed', 0)}\n"
+                f"Output creati: {summary.get('outputs_created', 0)}\n"
+                f"Warning: {len(warnings)}"
+            )
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch Percentile:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
