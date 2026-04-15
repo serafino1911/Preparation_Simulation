@@ -40,8 +40,56 @@ class FarmOperationsWindow:
         
         # Carica configurazione farm
         self.farm_config = self.load_farm_config()
+        self._script_template_cache = {}
         
         self.setup_ui()
+
+    def _get_scripts_root(self):
+        """Restituisce la cartella locale con i template script."""
+        return Path(__file__).resolve().parent.parent / "Working_Files" / "scripts"
+
+    def _load_script_template(self, relative_path):
+        """Carica un template script da Working_Files/scripts con cache in memoria."""
+        cache_key = str(relative_path).replace('\\', '/')
+        if cache_key in self._script_template_cache:
+            return self._script_template_cache[cache_key]
+
+        template_path = self._get_scripts_root() / relative_path
+        try:
+            template_content = template_path.read_text(encoding='utf-8')
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"Template script non trovato: {template_path}. "
+                "Verifica i file in Working_Files/scripts."
+            ) from exc
+
+        self._script_template_cache[cache_key] = template_content
+        return template_content
+
+    def _render_script_template(self, relative_path, placeholders):
+        """Renderizza un template sostituendo solo placeholder ${TPL_*}."""
+        template_content = self._load_script_template(relative_path)
+        token_pattern = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+        def _replace(match):
+            key = match.group(1)
+            if key in placeholders:
+                return str(placeholders[key])
+            return match.group(0)
+
+        rendered = token_pattern.sub(_replace, template_content)
+        unresolved = sorted({
+            match.group(1)
+            for match in token_pattern.finditer(rendered)
+            if match.group(1).startswith('TPL_')
+        })
+        if unresolved:
+            unresolved_str = ', '.join(unresolved)
+            raise RuntimeError(
+                f"Placeholder non risolti nel template {relative_path}: {unresolved_str}"
+            )
+
+        return rendered
     
     def load_farm_config(self):
         """Carica la configurazione farm esistente"""
@@ -1206,77 +1254,17 @@ class FarmOperationsWindow:
             terrel_exe = f"{worki_folder}/TERREL/terrel_v7.0.0.exe"
             ctgproc_exe = f"{worki_folder}/CTGPROC/ctgproc_nostro.exe"
             makegeo_exe = f"{worki_folder}/MAKEGEO_V3.2_L110401/makegeo_v3.2.exe"
-            
-            terrel_inp = f"{worki_folder}/TERREL/terrel.inp"
-            ctgproc_inp = f"{worki_folder}/CTGPROC/ctgproc.inp"
-            makegeo_inp = f"{worki_folder}/MAKEGEO_V3.2_L110401/makegeo.inp"
-            
-            # Script bash per eseguire la sequenza completa
-            bash_script = f"""#!/bin/bash
-set -e
 
-echo "=== Inizio elaborazione geografica ==="
-
-# Carica ambiente Intel Fortran Compiler
-echo "Caricamento ambiente Intel Fortran..."
-if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
-    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
-    echo "✓ Intel Fortran environment caricato"
-else
-    echo "⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi..."
-    # Fallback: setup manuale LD_LIBRARY_PATH
-    if [ -d "/opt/intel/lib/intel64" ]; then
-        export LD_LIBRARY_PATH="/opt/intel/lib/intel64:$LD_LIBRARY_PATH"
-    fi
-    if [ -d "/opt/intel/compilers_and_libraries/linux/lib/intel64" ]; then
-        export LD_LIBRARY_PATH="/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH"
-    fi
-fi
-
-# Setup librerie NetCDF 
-export LD_LIBRARY_PATH="/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH"
-
-cd {working_folder}
-
-# Step 1: TERREL
-echo "Step 1/3: Esecuzione TERREL..."
-cd TERREL
-{terrel_exe} terrel.inp
-if [ $? -ne 0 ]; then
-    echo "ERRORE: TERREL fallito"
-    exit 1
-fi
-echo "✓ TERREL completato"
-
-# Step 2: CTGPROC
-echo "Step 2/3: Esecuzione CTGPROC..."
-cd {worki_folder}/CTGPROC
-{ctgproc_exe} ctgproc.inp
-if [ $? -ne 0 ]; then
-    echo "ERRORE: CTGPROC fallito"
-    exit 2
-fi
-echo "✓ CTGPROC completato"
-
-# Step 3: Copia output TERREL e CTGPROC in MAKEGEO
-echo "Copia output per MAKEGEO..."
-cd {working_folder}
-cp TERREL/terrel.dat MAKEGEO_V3.2_L110401/terrel.dat
-cp CTGPROC/luse.dat MAKEGEO_V3.2_L110401/luse.dat
-echo "✓ Output copiati"
-
-# Step 4: MAKEGEO
-echo "Step 3/3: Esecuzione MAKEGEO..."
-cd {worki_folder}/MAKEGEO_V3.2_L110401
-{makegeo_exe} makegeo.inp
-if [ $? -ne 0 ]; then
-    echo "ERRORE: MAKEGEO fallito"
-    exit 3
-fi
-echo "✓ MAKEGEO completato"
-
-echo "=== Elaborazione geografica completata con successo ==="
-"""
+            bash_script = self._render_script_template(
+                "run_geographic.sh.template",
+                {
+                    "TPL_WORKING_FOLDER": working_folder,
+                    "TPL_WORKI_FOLDER": worki_folder,
+                    "TPL_TERREL_EXE": terrel_exe,
+                    "TPL_CTGPROC_EXE": ctgproc_exe,
+                    "TPL_MAKEGEO_EXE": makegeo_exe,
+                },
+            )
             
             # Salva lo script sul server
             script_path = f"{working_folder}/run_geographic.sh"
@@ -1693,122 +1681,17 @@ echo "=== Elaborazione geografica completata con successo ==="
                 error_text = stderr.read().decode().strip()
                 raise RuntimeError(f"Impossibile creare cartella output CALMET: {error_text}")
 
-            bash_script = f"""#!/bin/bash
-
-WORKING_FOLDER=\"{work_folder}\"
-CALMET_DIR=\"{calmet_dir}\"
-WRF_PATH=\"{wrf_path.rstrip('/')}\"
-CALMET_DATA_DIR=\"{calmet_data_dir}\"
-METDATA=\"{calmet_data}\"
-WRF_LINK_MODE=\"{'ln -sf' if link_calmet else 'cp'}\"
-
-echo \"=== Avvio batch CALMET ===\"
-echo \"Working folder: ${{WORKING_FOLDER}}\"
-echo \"CALMET dir: ${{CALMET_DIR}}\"
-echo \"WRF path: ${{WRF_PATH}}\"
-echo \"Output dir: ${{CALMET_DATA_DIR}}\"
-
-# Carica ambiente Intel Fortran Compiler
-echo \"Caricamento ambiente Intel Fortran...\"
-if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
-    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
-    echo \"✓ Intel Fortran environment caricato\"
-else
-    echo \"⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi...\"
-    # Fallback: setup manuale LD_LIBRARY_PATH
-    if [ -d \"/opt/intel/lib/intel64\" ]; then
-        export LD_LIBRARY_PATH=\"/opt/intel/lib/intel64:$LD_LIBRARY_PATH\"
-    fi
-    if [ -d \"/opt/intel/compilers_and_libraries/linux/lib/intel64\" ]; then
-        export LD_LIBRARY_PATH=\"/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH\"
-    fi
-fi
-
-# Setup librerie NetCDF
-export LD_LIBRARY_PATH=\"/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH\"
-
-mkdir -p \"${{CALMET_DATA_DIR}}\"
-
-shopt -s nullglob
-mapfile -t INP_FILES < <(find \"${{WORKING_FOLDER}}\" -maxdepth 2 -type f -path \"${{WORKING_FOLDER}}/CALMET_INP*/*.inp\" | sort)
-
-if [ ${{#INP_FILES[@]}} -eq 0 ]; then
-    echo \"ERRORE: nessun file .inp trovato in CALMET_INP*\"
-    exit 10
-fi
-
-echo \"File INP trovati: ${{#INP_FILES[@]}}\"
-
-for INP_FILE in \"${{INP_FILES[@]}}\"; do
-    INP_NAME=$(basename \"${{INP_FILE}}\")
-    INP_BASENAME=\"${{INP_NAME%.inp}}\"
-
-    if [[ \"${{INP_BASENAME}}\" =~ ([0-9]{{8}}) ]]; then
-        DATE_YYYYMMDD=\"${{BASH_REMATCH[1]}}\"
-    else
-        echo \"WARNING: data non trovata nel nome file ${{INP_NAME}} -> salto\"
-        continue
-    fi
-
-    YEAR=\"${{DATE_YYYYMMDD:0:4}}\"
-    MONTH=\"${{DATE_YYYYMMDD:4:2}}\"
-    DAY=\"${{DATE_YYYYMMDD:6:2}}\"
-    DATE_DASH=\"${{YEAR}}-${{MONTH}}-${{DAY}}\"
-    DATE_C=\"${{YEAR}}${{MONTH}}${{DAY}}\"
-
-    echo \"--------------------------------------------------\"
-    echo \"Elaborazione: ${{INP_NAME}} (data ${{DATE_DASH}})\"
-
-    cp \"${{INP_FILE}}\" \"${{CALMET_DIR}}/calmet.inp\"
-    #filem2d = f'wrf_${{DATE_C}}_all.m2d'  # Nome file input 2D
-    #filem3d = f'wrf_${{DATE_C}}_all.m3d'  # Nome file input 3D
-    WRF_FILES=(\"${{WRF_PATH}}\"/wrf_\"${{DATE_C}}\"_*.m2d \"${{WRF_PATH}}\"/wrf_\"${{DATE_C}}\"_*.m3d)
-    if [ ${{#WRF_FILES[@]}} -eq 0 ]; then
-        echo \"⚠ ERRORE: nessun file WRF trovato per data ${{DATE_DASH}} in ${{WRF_PATH}}\"
-        echo \"Continuazione con prossimo file...\"
-        continue
-    fi
-
-    if [ \"${{WRF_LINK_MODE}}\" = \"ln -sf\" ]; then
-        for wrf_file in \"${{WRF_FILES[@]}}\"; do
-            ln -sf \"${{wrf_file}}\" \"${{CALMET_DIR}}/\"  
-        done
-    else
-        cp \"${{WRF_FILES[@]}}\" \"${{CALMET_DIR}}/\"
-    fi
-
-    cd \"${{CALMET_DIR}}\"
-    RUN_LOG=\"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.log\"
-    RUN_ERR=\"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.err\"
-
-    ./calmet.exe calmet.inp > \"${{RUN_LOG}}\" 2> \"${{RUN_ERR}}\"
-    RUN_STATUS=$?
-    if [ ${{RUN_STATUS}} -ne 0 ]; then
-        echo \"⚠ ERRORE: calmet.exe fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
-        echo \"Continuazione con prossimo file...\"
-    else
-        EXPECTED_DAT=$(find "${{CALMET_DIR}}" -maxdepth 1 -type f \( -iname "${{METDATA}}_${{DATE_C}}.dat" -o -iname "calmet.dat" \) | head -n 1)
-        if [ -n "${{EXPECTED_DAT}}" ]; then
-            cp "${{EXPECTED_DAT}}" "${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat"
-        else
-            echo "⚠ WARNING: file .dat non trovato (atteso: ${{METDATA}}_${{DATE_C}}.dat, case-insensitive)"
-        fi
-        if [ -f \"${{CALMET_DIR}}/list.lst\" ]; then
-            cp \"${{CALMET_DIR}}/list.lst\" \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.lst\"
-        fi
-        echo \"✓ Completato: ${{INP_NAME}}\"
-    fi
-    
-    # Pulizia file WRF utilizzati
-    echo \"Pulizia file WRF...\"
-    rm -f \"${{CALMET_DIR}}\"/wrf_*.m2d \"${{CALMET_DIR}}\"/wrf_*.m3d
-    echo \"✓ File WRF rimossi\"
-
-
-done
-
-echo \"=== Batch CALMET completato ===\"
-"""
+            bash_script = self._render_script_template(
+                "run_calmet_batch.sh.template",
+                {
+                    "TPL_WORK_FOLDER": work_folder,
+                    "TPL_CALMET_DIR": calmet_dir,
+                    "TPL_WRF_PATH": wrf_path.rstrip('/'),
+                    "TPL_CALMET_DATA_DIR": calmet_data_dir,
+                    "TPL_CALMET_DATA": calmet_data,
+                    "TPL_WRF_LINK_MODE": 'ln -sf' if link_calmet else 'cp',
+                },
+            )
 
             self.log_message("Creazione script remoto CALMET...")
             sftp = target_client.open_sftp()
@@ -2006,150 +1889,16 @@ echo \"=== Batch CALMET completato ===\"
                 error_text = stderr.read().decode().strip()
                 raise RuntimeError(f"Impossibile creare cartella output CALPUFF: {error_text}")
 
-            bash_script = f"""#!/bin/bash
-
-WORKING_FOLDER=\"{work_folder}\"
-CALPUFF_DIR=\"{calpuff_dir}\"
-CALPUFF_DATA_DIR=\"{calpuff_data_dir}\"
-CALMET_DATA_DIR=\"{calmet_data_dir}\"  
-CALMET_LINK_MODE=\"{'ln -sf' if link_calmet else 'cp -f'}\"
-
-echo \"=== Avvio batch CALPUFF ===\"
-echo \"Working folder: ${{WORKING_FOLDER}}\"
-echo \"CALPUFF dir: ${{CALPUFF_DIR}}\"
-echo \"Output dir: ${{CALPUFF_DATA_DIR}}\"
-echo \"CALMET data dir: ${{CALMET_DATA_DIR}}\"
-echo \"Modalità meteo CALMET→CALPUFF: ${{CALMET_LINK_MODE}}\"
-
-# Carica ambiente Intel Fortran Compiler
-echo \"Caricamento ambiente Intel Fortran...\"
-if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
-    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
-    echo \"✓ Intel Fortran environment caricato\"
-else
-    echo \"⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi...\"
-    # Fallback: setup manuale LD_LIBRARY_PATH
-    if [ -d \"/opt/intel/lib/intel64\" ]; then
-        export LD_LIBRARY_PATH=\"/opt/intel/lib/intel64:$LD_LIBRARY_PATH\"
-    fi
-    if [ -d \"/opt/intel/compilers_and_libraries/linux/lib/intel64\" ]; then
-        export LD_LIBRARY_PATH=\"/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH\"
-    fi
-fi
-
-# Setup librerie NetCDF
-export LD_LIBRARY_PATH=\"/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH\"
-
-mkdir -p \"${{CALPUFF_DATA_DIR}}\"
-
-shopt -s nullglob
-mapfile -t INP_FILES < <(find \"${{WORKING_FOLDER}}\" -maxdepth 2 -type f -path \"${{WORKING_FOLDER}}/CALPUFF_INP*/*.inp\" | sort)
-
-if [ ${{#INP_FILES[@]}} -eq 0 ]; then
-    echo \"ERRORE: nessun file .inp trovato in CALPUFF_INP*\"
-    exit 10
-fi
-
-if [ -x \"${{CALPUFF_DIR}}/calpuff.exe\" ]; then
-    CALPUFF_EXE=\"${{CALPUFF_DIR}}/calpuff.exe\"
-else
-    mapfile -t CALPUFF_EXE_CANDIDATES < <(find \"${{CALPUFF_DIR}}\" -maxdepth 1 -type f -name \"calpuff*.exe\" | sort)
-    if [ ${{#CALPUFF_EXE_CANDIDATES[@]}} -eq 0 ]; then
-        echo \"ERRORE: eseguibile CALPUFF non trovato in ${{CALPUFF_DIR}}\"
-        exit 11
-    fi
-    CALPUFF_EXE=\"${{CALPUFF_EXE_CANDIDATES[0]}}\"
-fi
-
-echo \"Eseguibile CALPUFF: ${{CALPUFF_EXE}}\"
-echo \"File INP trovati: ${{#INP_FILES[@]}}\"
-
-for INP_FILE in \"${{INP_FILES[@]}}\"; do
-    INP_NAME=$(basename \"${{INP_FILE}}\")
-    INP_BASENAME=\"${{INP_NAME%.inp}}\"
-
-    echo \"--------------------------------------------------\"
-    echo \"Elaborazione: ${{INP_NAME}}\"
-
-    cp \"${{INP_FILE}}\" \"${{CALPUFF_DIR}}/calpuff.inp\"
-
-    DATE_C=\"\"
-    if [[ \"${{INP_BASENAME}}\" =~ ([0-9]{{8}}) ]]; then
-        DATE_C=\"${{BASH_REMATCH[1]}}\"
-    fi
-
-    CALMET_DAT_SOURCE=\"\"
-    if [ -n \"${{DATE_C}}\" ] && [ -f \"${{CALMET_DATA_DIR}}/calmet_${{DATE_C}}.dat\" ]; then
-        CALMET_DAT_SOURCE=\"${{CALMET_DATA_DIR}}/calmet_${{DATE_C}}.dat\"
-    elif [ -f \"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat\" ]; then
-        CALMET_DAT_SOURCE=\"${{CALMET_DATA_DIR}}/${{INP_BASENAME}}.dat\"
-    elif [ -n \"${{DATE_C}}\" ]; then
-        mapfile -t CALMET_DAT_CANDIDATES < <(find \"${{CALMET_DATA_DIR}}\" -maxdepth 1 -type f -iname \"*${{DATE_C}}*.dat\" | sort)
-        if [ ${{#CALMET_DAT_CANDIDATES[@]}} -gt 0 ]; then
-            CALMET_DAT_SOURCE=\"${{CALMET_DAT_CANDIDATES[0]}}\"
-        fi
-    fi
-
-    if [ -z \"${{CALMET_DAT_SOURCE}}\" ]; then
-        echo \"⚠ ERRORE: file CALMET .dat non trovato per ${{INP_NAME}} in ${{CALMET_DATA_DIR}}\"
-        echo \"Continuazione con prossimo file...\"
-        continue
-    fi
-
-    CALMET_DAT_BASENAME=$(basename "${{CALMET_DAT_SOURCE}}")
-    if [ -n "${{DATE_C}}" ]; then
-        CALMET_DAT_TARGET="CALMET_${{DATE_C}}.DAT"
-    else
-        CALMET_DAT_TARGET=$(echo "${{CALMET_DAT_BASENAME}}" | tr '[:lower:]' '[:upper:]')
-    fi
-    rm -f \"${{CALPUFF_DIR}}/calmet.dat\" \"${{CALPUFF_DIR}}/calmet_\"*.dat \"${{CALPUFF_DIR}}/CALMET_\"*.DAT
-    if [ \"${{CALMET_LINK_MODE}}\" = \"ln -sf\" ]; then
-        ln -sf "${{CALMET_DAT_SOURCE}}" "${{CALPUFF_DIR}}/${{CALMET_DAT_TARGET}}"
-    else
-        cp  "${{CALMET_DAT_SOURCE}}" "${{CALPUFF_DIR}}/${{CALMET_DAT_TARGET}}"
-    fi
-    echo "Meteo associato: ${{CALMET_DAT_TARGET}} (sorgente: ${{CALMET_DAT_BASENAME}})"
-
-    cd \"${{CALPUFF_DIR}}\"
-    RUN_LOG=\"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}.log\"
-    RUN_ERR=\"${{CALPUFF_DATA_DIR}}/${{INP_BASENAME}}.err\"
-
-    \"${{CALPUFF_EXE}}\" calpuff.inp > \"${{RUN_LOG}}\" 2> \"${{RUN_ERR}}\"
-    RUN_STATUS=$?
-    if [ ${{RUN_STATUS}} -ne 0 ]; then
-        echo \"⚠ ERRORE: calpuff fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
-        echo \"Continuazione con prossimo file...\"
-    else
-        for OUTPUT_FILE in CALPUFFOUTPUT_*.*; do
-            if [ -f \"${{OUTPUT_FILE}}\" ]; then
-                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\"
-                sleep 2
-                if [ -f \"${{CALPUFF_DATA_DIR}}/${{OUTPUT_FILE}}\" ]; then
-                    rm -f \"${{OUTPUT_FILE}}\"
-                fi
-                sleep 2
-            fi
-        done
-        echo \"✓ Completato: ${{INP_NAME}}\"
-        sleep 2
-    fi
-
-done
-
-for RESTART_FILE in "${{CALPUFF_DIR}}"/RESTART*.DAT; do
-    if [ -f "${{RESTART_FILE}}" ]; then
-        RESTART_BASENAME=$(basename "${{RESTART_FILE}}")
-        cp -f "${{RESTART_FILE}}" "${{CALPUFF_DATA_DIR}}/${{RESTART_BASENAME}}"
-        sleep 2
-        if [ -f "${{CALPUFF_DATA_DIR}}/${{RESTART_BASENAME}}" ]; then
-            rm -f "${{RESTART_FILE}}"
-        fi
-        sleep 2
-    fi
-done
-
-echo \"=== Batch CALPUFF completato ===\"
-"""
+            bash_script = self._render_script_template(
+                "run_calpuff_batch.sh.template",
+                {
+                    "TPL_WORK_FOLDER": work_folder,
+                    "TPL_CALPUFF_DIR": calpuff_dir,
+                    "TPL_CALPUFF_DATA_DIR": calpuff_data_dir,
+                    "TPL_CALMET_DATA_DIR": calmet_data_dir,
+                    "TPL_CALMET_LINK_MODE": 'ln -sf' if link_calmet else 'cp -f',
+                },
+            )
 
             self.log_message("Creazione script remoto CALPUFF...")
             sftp = target_client.open_sftp()
@@ -2345,109 +2094,16 @@ echo \"=== Batch CALPUFF completato ===\"
                 error_text = stderr.read().decode().strip()
                 raise RuntimeError(f"Impossibile creare cartella output CALPOST: {error_text}")
 
-            bash_script = f"""#!/bin/bash
-
-WORKING_FOLDER=\"{work_folder}\"
-CALPOST_DIR=\"{calpost_dir}\"
-CALPUFF_DIR=\"{calpuff_dir}\"
-CALPUFF_DATA_DIR=\"{calpuff_data_dir}\"
-CALPOST_DATA_DIR=\"{calpost_data_dir}\"
-
-echo \"=== Avvio batch CALPOST ===\"
-echo \"Working folder: ${{WORKING_FOLDER}}\"
-echo \"CALPOST dir: ${{CALPOST_DIR}}\"
-echo \"Output dir: ${{CALPOST_DATA_DIR}}\"
-
-# Carica ambiente Intel Fortran Compiler
-echo \"Caricamento ambiente Intel Fortran...\"
-if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
-    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
-    echo \"✓ Intel Fortran environment caricato\"
-else
-    echo \"⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi...\"
-    # Fallback: setup manuale LD_LIBRARY_PATH
-    if [ -d \"/opt/intel/lib/intel64\" ]; then
-        export LD_LIBRARY_PATH=\"/opt/intel/lib/intel64:$LD_LIBRARY_PATH\"
-    fi
-    if [ -d \"/opt/intel/compilers_and_libraries/linux/lib/intel64\" ]; then
-        export LD_LIBRARY_PATH=\"/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH\"
-    fi
-fi
-
-# Setup librerie NetCDF
-export LD_LIBRARY_PATH=\"/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH\"
-
-mkdir -p \"${{CALPOST_DATA_DIR}}\"
-
-shopt -s nullglob
-mapfile -t INP_FILES < <(find \"${{WORKING_FOLDER}}\" -maxdepth 2 -type f -path \"${{WORKING_FOLDER}}/CALPOST_INP*/*.inp\" | sort)
-
-if [ ${{#INP_FILES[@]}} -eq 0 ]; then
-    echo \"ERRORE: nessun file .inp trovato in CALPOST_INP*\"
-    exit 10
-fi
-
-if [ -x \"${{CALPOST_DIR}}/calpost.x\" ]; then
-    CALPOST_EXE=\"${{CALPOST_DIR}}/calpost.x\"
-else
-    mapfile -t CALPOST_EXE_CANDIDATES < <(find \"${{CALPOST_DIR}}\" -maxdepth 1 -type f -name \"calpost*.x\" | sort)
-    if [ ${{#CALPOST_EXE_CANDIDATES[@]}} -eq 0 ]; then
-        echo \"ERRORE: eseguibile CALPOST non trovato in ${{CALPOST_DIR}}\"
-        exit 11
-    fi
-    CALPOST_EXE=\"${{CALPOST_EXE_CANDIDATES[0]}}\"
-fi
-
-echo \"Eseguibile CALPOST: ${{CALPOST_EXE}}\"
-echo \"File INP trovati: ${{#INP_FILES[@]}}\"
-
-for INP_FILE in \"${{INP_FILES[@]}}\"; do
-    INP_NAME=$(basename \"${{INP_FILE}}\")
-    INP_BASENAME=\"${{INP_NAME%.inp}}\"
-
-    WANTED_DATE=\"\"
-    if [[ \"${{INP_BASENAME}}\" =~ ([0-9]{{8}}) ]]; then
-        WANTED_DATE=\"${{BASH_REMATCH[1]}}\"
-    fi
-
-    echo \"--------------------------------------------------\"
-    echo \"Elaborazione: ${{INP_NAME}}\"
-
-    cp \"${{INP_FILE}}\" \"${{CALPOST_DIR}}/calpost.inp\"
-
-    if [ -z \"${{WANTED_DATE}}\" ]; then
-        echo \"⚠ WARNING: data non trovata nel nome file ${{INP_NAME}}, skip copia CON\"
-        rm -f \"${{CALPOST_DIR}}\"/CALPUFF*.CON \"${{CALPOST_DIR}}\"/calmet.dat \"${{CALPOST_DIR}}\"/calmet_*.dat
-    elif compgen -G \"${{CALPOST_DIR}}/*${{WANTED_DATE}}*.CON\" > /dev/null; then
-        echo \"✓ File CON per ${{WANTED_DATE}} già presente in ${{CALPOST_DIR}}\"
-    elif [ -d \"${{CALPUFF_DATA_DIR}}\" ]; then
-        cp -f \"${{CALPUFF_DATA_DIR}}\"/*${{WANTED_DATE}}*.CON \"${{CALPOST_DIR}}\"/ 2>/dev/null || true
-    fi
-
-    cd \"${{CALPOST_DIR}}\"
-    RUN_LOG=\"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}.log\"
-    RUN_ERR=\"${{CALPOST_DATA_DIR}}/${{INP_BASENAME}}.err\"
-
-    \"${{CALPOST_EXE}}\" calpost.inp > \"${{RUN_LOG}}\" 2> \"${{RUN_ERR}}\"
-    RUN_STATUS=$?
-    if [ ${{RUN_STATUS}} -ne 0 ]; then
-        echo \"⚠ ERRORE: calpost fallito per ${{INP_NAME}} (exit ${{RUN_STATUS}})\"
-        echo \"Continuazione con prossimo file...\"
-    else
-        for OUTPUT_FILE in CALPOST_*.LST *.CSV *.GRD *.ASC *.DAT; do
-            if [ -f \"${{OUTPUT_FILE}}\" ]; then
-                cp -f \"${{OUTPUT_FILE}}\" \"${{CALPOST_DATA_DIR}}/${{OUTPUT_FILE}}\"
-                sleep 1
-                rm -f \"${{OUTPUT_FILE}}\"
-            fi
-        done
-        echo \"✓ Completato: ${{INP_NAME}}\"
-    fi
-done
-rm -f \"${{CALPOST_DIR}}\"/CALPUFF*.CON \"${{CALPOST_DIR}}\"/calmet.dat \"${{CALPOST_DIR}}\"/calmet_*.dat
-
-echo \"=== Batch CALPOST completato ===\"
-"""
+            bash_script = self._render_script_template(
+                "run_calpost_batch.sh.template",
+                {
+                    "TPL_WORK_FOLDER": work_folder,
+                    "TPL_CALPOST_DIR": calpost_dir,
+                    "TPL_CALPUFF_DIR": calpuff_dir,
+                    "TPL_CALPUFF_DATA_DIR": calpuff_data_dir,
+                    "TPL_CALPOST_DATA_DIR": calpost_data_dir,
+                },
+            )
 
             self.log_message("Creazione script remoto CALPOST...")
             sftp = target_client.open_sftp()
@@ -2564,12 +2220,14 @@ echo \"=== Batch CALPOST completato ===\"
         post_process_path = self.temp_dir / "post_process.json"
         saved_aggreg_folder = "AGGREG"
         saved_use_links = False
+        saved_background = False
         if post_process_path.exists():
             try:
                 with open(post_process_path, 'r', encoding='utf-8') as _f:
                     _pp = json.load(_f)
                 saved_aggreg_folder = str(_pp.get('aggreg_folder', 'AGGREG')).strip() or 'AGGREG'
                 saved_use_links = bool(_pp.get('use_links', False))
+                saved_background = bool(_pp.get('aggreg_background', False))
             except Exception:
                 pass
 
@@ -2606,6 +2264,13 @@ echo \"=== Batch CALPOST completato ===\"
             row=4, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 12)
         )
 
+        background_var = tk.BooleanVar(value=saved_background)
+        tk.Checkbutton(
+            dialog,
+            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            variable=background_var
+        ).grid(row=5, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 12))
+
         def _on_ok():
             folder = folder_var.get().strip()
             if not folder:
@@ -2613,13 +2278,14 @@ echo \"=== Batch CALPOST completato ===\"
                 return
             dialog_result['use_links'] = (mode_var.get() == "link")
             dialog_result['aggreg_folder'] = folder
+            dialog_result['run_in_background'] = background_var.get()
             dialog.destroy()
 
         def _on_cancel():
             dialog.destroy()
 
         btn_frame = tk.Frame(dialog)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=(0, 12))
+        btn_frame.grid(row=6, column=0, columnspan=2, pady=(0, 12))
         tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
         tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
 
@@ -2634,27 +2300,47 @@ echo \"=== Batch CALPOST completato ===\"
 
         use_links = dialog_result['use_links']
         aggreg_folder = dialog_result['aggreg_folder']
+        run_in_background = bool(dialog_result.get('run_in_background', False))
         aggregation_mode = "link simbolici" if use_links else "copia file"
 
         # Persist to post_process.json
         try:
+            previous = {}
+            if post_process_path.exists():
+                with open(post_process_path, 'r', encoding='utf-8') as _f:
+                    previous = json.load(_f)
+            previous['aggreg_folder'] = aggreg_folder
+            previous['use_links'] = use_links
+            previous['aggreg_background'] = run_in_background
             with open(post_process_path, 'w', encoding='utf-8') as _f:
-                json.dump({'aggreg_folder': aggreg_folder, 'use_links': use_links}, _f, indent=2, ensure_ascii=False)
+                json.dump(previous, _f, indent=2, ensure_ascii=False)
         except Exception:
             pass
 
         self.log_message(f"cartella sorgente CALPOST: {calpost_data}")
         self.log_message(f"Modalità aggregazione: {aggregation_mode}")
         self.log_message(f"Cartella destinazione: {aggreg_folder}/<PARAMETRO>")
+        self.log_message(
+            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            if run_in_background else
+            "Modalità esecuzione: foreground (monitorata dalla UI)"
+        )
+
+        if run_in_background:
+            messagebox.showwarning(
+                "Attenzione",
+                "L'aggregazione verrà sottomessa in background con bsub -q pmten.\n"
+                "Il lavoro non sarà monitorato dalla UI."
+            )
 
         thread = threading.Thread(
             target=self._launch_aggreg_thread,
-            args=(calpost_data, use_links, aggreg_folder)
+            args=(calpost_data, use_links, aggreg_folder, run_in_background)
         )
         thread.daemon = True
         thread.start()
 
-    def _launch_aggreg_thread(self, calpost_data, use_links=False, aggreg_folder='AGGREG'):
+    def _launch_aggreg_thread(self, calpost_data, use_links=False, aggreg_folder='AGGREG', run_in_background=False):
         """Thread per aggregare i CSV CALPOST in sottocartelle per parametro"""
         jump_client = None
         target_client = None
@@ -2712,77 +2398,60 @@ echo \"=== Batch CALPOST completato ===\"
                 raise RuntimeError(f"Cartella output CALPOST non trovata: {calpost_data_dir}")
 
             self.log_message("Ricerca parametri nei file CSV CALPOST...")
-            remote_command = f"""python3 - <<'PY'
-from pathlib import Path
-import json
-import os
-import re
-import shutil
-import sys
+            remote_script = self._render_script_template(
+                "python/aggregate_csv.py.template",
+                {
+                    "TPL_SOURCE_DIR_LITERAL": source_dir_literal,
+                    "TPL_DEST_ROOT_LITERAL": dest_root_literal,
+                    "TPL_MODE_LITERAL": mode_literal,
+                },
+            )
 
-source_dir = Path({source_dir_literal})
-dest_root = Path({dest_root_literal})
-mode = {mode_literal}
+            if run_in_background:
+                target_client.exec_command(f'mkdir -p "{aggregate_root_dir}"')
+                script_path = f"{work_folder}/run_aggreg_background.sh"
+                bsub_out = f"{aggregate_root_dir}/aggreg_output.log"
+                bsub_err = f"{aggregate_root_dir}/aggreg_error.log"
+                wrapper_script = "#!/bin/bash\nset -e\npython3 - <<'PY'\n" + remote_script + "\nPY\n"
 
-if not source_dir.is_dir():
-    print("ERRORE: cartella sorgente non trovata: " + str(source_dir), file=sys.stderr)
-    raise SystemExit(10)
+                self.log_message("Creazione script remoto aggregazione (background)...")
+                sftp = target_client.open_sftp()
+                with sftp.open(script_path, 'w') as script_file:
+                    script_file.write(wrapper_script)
+                sftp.close()
 
-csv_files = sorted(
-    [path for path in source_dir.iterdir() if path.is_file() and path.suffix.lower() == ".csv"],
-    key=lambda path: path.name.lower()
-)
-if not csv_files:
-    print("ERRORE: nessun file CSV trovato in " + str(source_dir), file=sys.stderr)
-    raise SystemExit(11)
+                target_client.exec_command(f'chmod +x "{script_path}"')
+                target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-pattern = re.compile(r"_L\\d+_([^_]+)_.*\\.csv$", re.IGNORECASE)
-counts = dict()
-skipped = []
-prepared_dirs = set()
+                bsub_command = (
+                    f'cd "{work_folder}"; '
+                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                )
+                stdin, stdout, stderr = target_client.exec_command(bsub_command)
+                output = stdout.read().decode().strip()
+                error = stderr.read().decode().strip()
+                exit_status = stdout.channel.recv_exit_status()
 
-dest_root.mkdir(parents=True, exist_ok=True)
+                if output:
+                    self.log_message(f"Output bsub aggregazione:\n{output}")
+                if error:
+                    self.log_message(f"Stderr bsub aggregazione:\n{error}")
 
-for csv_file in csv_files:
-    match = pattern.search(csv_file.name)
-    if not match:
-        skipped.append(csv_file.name)
-        continue
+                if exit_status != 0:
+                    raise RuntimeError(error or f"Sottomissione aggregazione fallita con exit code {exit_status}")
 
-    parameter_name = match.group(1).upper()
-    parameter_dir = dest_root / parameter_name
+                self.log_message("\n✓ Job aggregazione sottomesso in background!")
+                self.log_message(f"Log output: {bsub_out}")
+                self.log_message(f"Log errori: {bsub_err}")
+                messagebox.showwarning(
+                    "Job Aggregazione Sottomesso",
+                    "Job aggregazione sottomesso con bsub -q pmten.\n\n"
+                    "Il lavoro non è monitorato dalla UI.\n"
+                    f"Controlla i log:\n{bsub_out}\n{bsub_err}"
+                )
+                return
 
-    if parameter_name not in prepared_dirs:
-        parameter_dir.mkdir(parents=True, exist_ok=True)
-        for existing_file in parameter_dir.iterdir():
-            if (existing_file.is_file() or existing_file.is_symlink()) and existing_file.suffix.lower() == ".csv":
-                existing_file.unlink()
-        prepared_dirs.add(parameter_name)
-
-    dest_file = parameter_dir / csv_file.name
-    if dest_file.exists() or dest_file.is_symlink():
-        dest_file.unlink()
-
-    if mode == "link":
-        os.symlink(str(csv_file), str(dest_file))
-    else:
-        shutil.copy2(str(csv_file), str(dest_file))
-
-    counts[parameter_name] = counts.get(parameter_name, 0) + 1
-
-if not counts:
-    print("ERRORE: nessun parametro riconosciuto nei nomi file CSV", file=sys.stderr)
-    raise SystemExit(12)
-
-print(json.dumps(dict(
-    dest_root=str(dest_root),
-    mode=mode,
-    counts=counts,
-    skipped=skipped,
-    total_csv=len(csv_files),
-    matched_csv=sum(counts.values())
-)))
-PY"""
+            remote_command = "python3 - <<'PY'\n" + remote_script + "\nPY"
 
             stdin, stdout, stderr = target_client.exec_command(remote_command)
             output = stdout.read().decode().strip()
@@ -2875,12 +2544,14 @@ PY"""
         saved_source_folder = "AGGREG"
         saved_output_folder = "MEAN"
         saved_granularity = ["daily"]
+        saved_background = False
         if post_process_path.exists():
             try:
                 with open(post_process_path, 'r', encoding='utf-8') as _f:
                     _pp = json.load(_f)
                 saved_source_folder = str(_pp.get('mean_source_folder', _pp.get('aggreg_folder', 'AGGREG'))).strip() or 'AGGREG'
                 saved_output_folder = str(_pp.get('mean_output_folder', 'MEAN')).strip() or 'MEAN'
+                saved_background = bool(_pp.get('mean_background', False))
                 configured = _pp.get('mean_granularity', ['daily'])
                 if isinstance(configured, list):
                     saved_granularity = [str(item).lower() for item in configured if str(item).strip()]
@@ -2939,6 +2610,13 @@ PY"""
             row=7, column=0, sticky='w', padx=24
         )
 
+        background_var = tk.BooleanVar(value=saved_background)
+        tk.Checkbutton(
+            dialog,
+            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            variable=background_var
+        ).grid(row=8, column=0, columnspan=2, sticky='w', padx=24, pady=(8, 0))
+
         def _on_ok():
             source_folder = source_var.get().strip()
             destination_folder = destination_var.get().strip()
@@ -2963,13 +2641,14 @@ PY"""
             dialog_result['source_folder'] = source_folder
             dialog_result['destination_folder'] = destination_folder
             dialog_result['granularities'] = granularities
+            dialog_result['run_in_background'] = background_var.get()
             dialog.destroy()
 
         def _on_cancel():
             dialog.destroy()
 
         btn_frame = tk.Frame(dialog)
-        btn_frame.grid(row=8, column=0, columnspan=2, pady=(8, 12))
+        btn_frame.grid(row=9, column=0, columnspan=2, pady=(8, 12))
         tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
         tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
 
@@ -2985,6 +2664,7 @@ PY"""
         source_folder = dialog_result['source_folder']
         destination_folder = dialog_result['destination_folder']
         granularities = dialog_result['granularities']
+        run_in_background = bool(dialog_result.get('run_in_background', False))
 
         try:
             previous = {}
@@ -2994,6 +2674,7 @@ PY"""
             previous['mean_source_folder'] = source_folder
             previous['mean_output_folder'] = destination_folder
             previous['mean_granularity'] = granularities
+            previous['mean_background'] = run_in_background
             with open(post_process_path, 'w', encoding='utf-8') as _f:
                 json.dump(previous, _f, indent=2, ensure_ascii=False)
         except Exception:
@@ -3002,15 +2683,27 @@ PY"""
         self.log_message(f"Sorgente: {source_folder}")
         self.log_message(f"Destinazione: {destination_folder}")
         self.log_message(f"Granularità selezionate: {', '.join(granularities)}")
+        self.log_message(
+            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            if run_in_background else
+            "Modalità esecuzione: foreground (monitorata dalla UI)"
+        )
+
+        if run_in_background:
+            messagebox.showwarning(
+                "Attenzione",
+                "Il calcolo medie verrà sottomesso in background con bsub -q pmten.\n"
+                "Il lavoro non sarà monitorato dalla UI."
+            )
 
         thread = threading.Thread(
             target=self._launch_mean_thread,
-            args=(source_folder, destination_folder, granularities)
+            args=(source_folder, destination_folder, granularities, run_in_background)
         )
         thread.daemon = True
         thread.start()
 
-    def _launch_mean_thread(self, source_folder, destination_folder, granularities):
+    def _launch_mean_thread(self, source_folder, destination_folder, granularities, run_in_background=False):
         """Thread per calcolare medie dai CSV aggregati"""
         jump_client = None
         target_client = None
@@ -3067,357 +2760,59 @@ PY"""
             destination_root_literal = json.dumps(destination_root)
             granularities_literal = json.dumps(granularities)
 
-            remote_script = """from pathlib import Path
-import csv
-import json
-import re
-import sys
+            remote_script = self._render_script_template(
+                "python/calc_mean.py.template",
+                {
+                    "TPL_SOURCE_ROOT_LITERAL": source_root_literal,
+                    "TPL_DESTINATION_ROOT_LITERAL": destination_root_literal,
+                    "TPL_GRANULARITIES_LITERAL": granularities_literal,
+                },
+            )
 
-source_root = Path(__SOURCE_ROOT__)
-destination_root = Path(__DESTINATION_ROOT__)
-granularities = __GRANULARITIES__
+            if run_in_background:
+                target_client.exec_command(f'mkdir -p "{destination_root}"')
+                script_path = f"{work_folder}/run_mean_background.sh"
+                bsub_out = f"{destination_root}/mean_output.log"
+                bsub_err = f"{destination_root}/mean_error.log"
+                wrapper_script = "#!/bin/bash\nset -e\npython3 - <<'PY'\n" + remote_script + "\nPY\n"
 
-if not source_root.is_dir():
-    print("ERRORE: cartella sorgente non trovata: " + str(source_root), file=sys.stderr)
-    raise SystemExit(10)
+                self.log_message("Creazione script remoto medie (background)...")
+                sftp = target_client.open_sftp()
+                with sftp.open(script_path, 'w') as script_file:
+                    script_file.write(wrapper_script)
+                sftp.close()
 
-destination_root.mkdir(parents=True, exist_ok=True)
+                target_client.exec_command(f'chmod +x "{script_path}"')
+                target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-time_pattern = re.compile(r"^(?P<year>\\d{4})_M(?P<month>\\d{2})_D(?P<day>\\d{2})_")
-
-
-def parse_time_key(file_name):
-    match = time_pattern.search(file_name)
-    if not match:
-        return None
-    year = match.group('year')
-    month = match.group('month')
-    day = match.group('day')
-    return dict(
-        daily=f"{year}{month}{day}",
-        monthly=f"{year}{month}",
-        annual=year,
-    )
-
-
-def is_float(value):
-    try:
-        float(value)
-        return True
-    except Exception:
-        return False
-
-
-def normalized_name(value):
-    return value.strip().lower().replace(' ', '').replace('-', '_')
-
-
-def cleaned_cell(row, column_name):
-    value = row.get(column_name, '')
-    if value is None:
-        return ''
-    return str(value).strip()
-
-
-def detect_concentration_columns(fieldnames, sample_rows):
-    receptor_like = {
-        'x', 'y', 'x_km', 'y_km', 'xkm', 'ykm',
-        'receptor', 'recettore', 'id', 'lon', 'lat', 'longitude', 'latitude'
-    }
-    value_like = {'value', 'val', 'conc', 'concentration'}
-    candidates = []
-    for col in fieldnames:
-        lowered = normalized_name(col)
-        if lowered in receptor_like:
-            continue
-        if lowered in value_like or 'conc' in lowered or 'concentration' in lowered:
-            if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
-                candidates.append(col)
-
-    if candidates:
-        return candidates
-
-    numeric_cols = []
-    for col in fieldnames:
-        lowered = normalized_name(col)
-        if lowered in receptor_like:
-            continue
-        if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
-            numeric_cols.append(col)
-
-    if numeric_cols:
-        return [numeric_cols[-1]]
-
-    return []
-
-
-def sort_key_columns(key_cols):
-    preferred = ['x_km', 'y_km', 'x', 'y', 'receptor']
-    ordered = []
-    used = set()
-    normalized_lookup = {normalized_name(col): col for col in key_cols}
-    for pref in preferred:
-        if pref in normalized_lookup:
-            ordered.append(normalized_lookup[pref])
-            used.add(normalized_lookup[pref])
-    for col in key_cols:
-        if col not in used:
-            ordered.append(col)
-    return ordered
-
-
-def period_units(granularity):
-    if granularity == 'daily':
-        return 'hours/day processed'
-    if granularity == 'monthly':
-        return 'hours/month processed'
-    return 'hours/year processed'
-
-
-def report_title(granularity):
-    return f"        1   {granularity.upper()} AVERAGE  CONCENTRATION VALUES AT EACH RECEPTOR  (g/m**3)"
-
-
-def find_csv_header_index(lines):
-    for idx, raw_line in enumerate(lines):
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        columns = [normalized_name(part) for part in stripped.split(',')]
-        if 'x_km' in columns and 'y_km' in columns and 'value' in columns:
-            return idx
-    return None
-
-
-def load_csv_dataset(csv_path):
-    with csv_path.open('r', encoding='utf-8', newline='') as handle:
-        lines = handle.readlines()
-
-    header_index = find_csv_header_index(lines)
-    if header_index is None:
-        return None
-
-    csv_content = ''.join(lines[header_index:])
-    reader = csv.DictReader(csv_content.splitlines())
-    fieldnames = reader.fieldnames or []
-    rows = [
-        row for row in reader
-        if any(cleaned_cell(row, col) for col in fieldnames)
-    ]
-
-    if not fieldnames or not rows:
-        return None
-
-    concentration_cols = detect_concentration_columns(fieldnames, rows[: min(25, len(rows))])
-    if not concentration_cols:
-        return None
-
-    key_cols = sort_key_columns([col for col in fieldnames if col not in concentration_cols])
-    row_map = {}
-    for row in rows:
-        key = tuple((col, row.get(col, '')) for col in key_cols)
-        concentrations = []
-        for conc_col in concentration_cols:
-            raw_value = cleaned_cell(row, conc_col)
-            if not raw_value:
-                concentrations.append(None)
-            else:
-                try:
-                    concentrations.append(float(raw_value))
-                except Exception:
-                    concentrations.append(None)
-        row_map[key] = dict(
-            meta={col: row.get(col, '') for col in key_cols},
-            values=concentrations,
-        )
-
-    return dict(
-        fieldnames=fieldnames,
-        key_cols=key_cols,
-        concentration_cols=concentration_cols,
-        row_map=row_map,
-    )
-
-
-def merge_period(files_for_period):
-    datasets = []
-    warnings = []
-    skipped = []
-
-    for file_path in files_for_period:
-        dataset = load_csv_dataset(file_path)
-        if dataset is None:
-            skipped.append(file_path.name)
-            continue
-        datasets.append((file_path, dataset))
-
-    if not datasets:
-        return None, warnings, skipped
-
-    base_file, base_dataset = datasets[0]
-    concentration_cols = list(base_dataset['concentration_cols'])
-    key_cols = list(base_dataset['key_cols'])
-
-    intersection = set(base_dataset['row_map'].keys())
-    valid_datasets = [(base_file, base_dataset)]
-
-    for file_path, dataset in datasets[1:]:
-        if dataset['concentration_cols'] != concentration_cols or dataset['key_cols'] != key_cols:
-            skipped.append(file_path.name)
-            warnings.append(f"Schema non compatibile, file ignorato: {file_path.name}")
-            continue
-        intersection &= set(dataset['row_map'].keys())
-        valid_datasets.append((file_path, dataset))
-
-    if not valid_datasets:
-        return None, warnings, skipped
-
-    if len(intersection) < len(valid_datasets[0][1]['row_map']):
-        warnings.append(
-            f"Griglia non allineata: uso intersezione righe ({len(intersection)} recettori)"
-        )
-
-    ordered_keys = [k for k in valid_datasets[0][1]['row_map'].keys() if k in intersection]
-    if not ordered_keys:
-        return None, warnings, skipped
-
-    rows_out = []
-    for key in ordered_keys:
-        meta = dict(valid_datasets[0][1]['row_map'][key]['meta'])
-        averaged = []
-        for idx, conc_col in enumerate(concentration_cols):
-            values = []
-            for _, dataset in valid_datasets:
-                value = dataset['row_map'][key]['values'][idx]
-                if value is not None:
-                    values.append(value)
-            if values:
-                averaged.append(sum(values) / len(values))
-            else:
-                averaged.append(None)
-
-        output_row = dict(meta)
-        for idx, conc_col in enumerate(concentration_cols):
-            if averaged[idx] is None:
-                output_row[conc_col] = ''
-            else:
-                output_row[conc_col] = f"{averaged[idx]:.6f}"
-        rows_out.append(output_row)
-
-    fieldnames_out = key_cols + concentration_cols
-    return dict(
-        fieldnames=fieldnames_out,
-        rows=rows_out,
-        files_used=len(valid_datasets),
-    ), warnings, skipped
-
-
-parameter_dirs = sorted([path for path in source_root.iterdir() if path.is_dir()], key=lambda p: p.name.lower())
-if not parameter_dirs:
-    print("ERRORE: nessuna sottocartella parametro trovata in " + str(source_root), file=sys.stderr)
-    raise SystemExit(11)
-
-summary = dict(
-    source_root=str(source_root),
-    destination_root=str(destination_root),
-    requested_granularity=granularities,
-    parameters_processed=0,
-    outputs_created=0,
-    warnings=[],
-    skipped_files=[],
-    details={},
-)
-
-for parameter_dir in parameter_dirs:
-    csv_files = sorted(
-        [path for path in parameter_dir.iterdir() if path.is_file() and path.suffix.lower() == '.csv'],
-        key=lambda p: p.name.lower()
-    )
-    if not csv_files:
-        continue
-
-    parameter_name = parameter_dir.name
-    summary['parameters_processed'] += 1
-    summary['details'][parameter_name] = {}
-
-    grouped = dict(daily={}, monthly={}, annual={})
-    unparsable = []
-    for file_path in csv_files:
-        time_key = parse_time_key(file_path.name)
-        if not time_key:
-            unparsable.append(file_path.name)
-            continue
-        for gran in ('daily', 'monthly', 'annual'):
-            grouped[gran].setdefault(time_key[gran], []).append(file_path)
-
-    if unparsable:
-        summary['warnings'].append(
-            f"{parameter_name}: file con nome non riconosciuto ignorati ({len(unparsable)})"
-        )
-        summary['skipped_files'].extend(unparsable)
-
-    for granularity in granularities:
-        periods = grouped.get(granularity, {})
-        if not periods:
-            summary['warnings'].append(f"{parameter_name}/{granularity}: nessun periodo disponibile")
-            continue
-
-        granularity_dir = destination_root / parameter_name / granularity.upper()
-        granularity_dir.mkdir(parents=True, exist_ok=True)
-
-        gran_created = 0
-        for period_key in sorted(periods.keys()):
-            files_for_period = periods[period_key]
-            result, period_warnings, period_skipped = merge_period(files_for_period)
-
-            if period_warnings:
-                for warning in period_warnings:
-                    summary['warnings'].append(
-                        f"{parameter_name}/{granularity}/{period_key}: {warning}"
-                    )
-            if period_skipped:
-                summary['skipped_files'].extend(period_skipped)
-
-            if result is None:
-                summary['warnings'].append(
-                    f"{parameter_name}/{granularity}/{period_key}: periodo saltato (dati non validi)"
+                bsub_command = (
+                    f'cd "{work_folder}"; '
+                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
                 )
-                continue
+                stdin, stdout, stderr = target_client.exec_command(bsub_command)
+                output = stdout.read().decode().strip()
+                error = stderr.read().decode().strip()
+                exit_status = stdout.channel.recv_exit_status()
 
-            output_name = f"mean_{granularity}_{period_key}.csv"
-            output_path = granularity_dir / output_name
-            with output_path.open('w', encoding='utf-8', newline='') as out_handle:
-                out_handle.write(report_title(granularity) + "\\n\\n")
-                out_handle.write(f"                   {parameter_name}          1\\n")
-                out_handle.write(f"                   ({result['files_used']} {period_units(granularity)})\\n")
-                out_handle.write("RECEPTOR\\n")
-                writer = csv.DictWriter(out_handle, fieldnames=result['fieldnames'], lineterminator='\\n')
-                writer.writeheader()
-                out_handle.write(" \\n")
-                writer.writerows(result['rows'])
+                if output:
+                    self.log_message(f"Output bsub medie:\n{output}")
+                if error:
+                    self.log_message(f"Stderr bsub medie:\n{error}")
 
-            gran_created += 1
-            summary['outputs_created'] += 1
+                if exit_status != 0:
+                    raise RuntimeError(error or f"Sottomissione medie fallita con exit code {exit_status}")
 
-            if granularity == 'daily' and len(files_for_period) < 24:
-                summary['warnings'].append(
-                    f"{parameter_name}/{granularity}/{period_key}: copertura oraria incompleta ({len(files_for_period)} file)"
+                self.log_message("\n✓ Job medie sottomesso in background!")
+                self.log_message(f"Log output: {bsub_out}")
+                self.log_message(f"Log errori: {bsub_err}")
+                messagebox.showwarning(
+                    "Job Medie Sottomesso",
+                    "Job medie sottomesso con bsub -q pmten.\n\n"
+                    "Il lavoro non è monitorato dalla UI.\n"
+                    f"Controlla i log:\n{bsub_out}\n{bsub_err}"
                 )
+                return
 
-        summary['details'][parameter_name][granularity] = dict(
-            periods_found=len(periods),
-            outputs_created=gran_created,
-        )
-
-summary_path = destination_root / 'mean_summary.json'
-with summary_path.open('w', encoding='utf-8') as summary_handle:
-    json.dump(summary, summary_handle, indent=2, ensure_ascii=False)
-
-print(json.dumps(summary, ensure_ascii=False))
-"""
-            remote_script = remote_script.replace('__SOURCE_ROOT__', source_root_literal)
-            remote_script = remote_script.replace('__DESTINATION_ROOT__', destination_root_literal)
-            remote_script = remote_script.replace('__GRANULARITIES__', granularities_literal)
             remote_command = "python3 - <<'PY'\n" + remote_script + "\nPY"
 
             self.log_message("Esecuzione calcolo medie sul server...")
@@ -3525,12 +2920,14 @@ print(json.dumps(summary, ensure_ascii=False))
         saved_output_folder = "PERCENTILE"
         saved_granularity = ["daily"]
         saved_percentiles = [98.0]
+        saved_background = False
         if post_process_path.exists():
             try:
                 with open(post_process_path, 'r', encoding='utf-8') as _f:
                     _pp = json.load(_f)
                 saved_source_folder = str(_pp.get('percentile_source_folder', _pp.get('aggreg_folder', 'AGGREG'))).strip() or 'AGGREG'
                 saved_output_folder = str(_pp.get('percentile_output_folder', 'PERCENTILE')).strip() or 'PERCENTILE'
+                saved_background = bool(_pp.get('percentile_background', False))
                 configured = _pp.get('percentile_granularity', ['daily'])
                 if isinstance(configured, list):
                     saved_granularity = [str(item).lower() for item in configured if str(item).strip()]
@@ -3646,6 +3043,13 @@ print(json.dumps(summary, ensure_ascii=False))
             row=14, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
         )
 
+        background_var = tk.BooleanVar(value=saved_background)
+        tk.Checkbutton(
+            dialog,
+            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            variable=background_var
+        ).grid(row=15, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8))
+
         def _normalize_percentiles(raw_values):
             unique_values = {}
             for value in raw_values:
@@ -3720,13 +3124,14 @@ print(json.dumps(summary, ensure_ascii=False))
             dialog_result['destination_folder'] = destination_folder
             dialog_result['granularities'] = granularities
             dialog_result['percentiles'] = percentile_values
+            dialog_result['run_in_background'] = background_var.get()
             dialog.destroy()
 
         def _on_cancel():
             dialog.destroy()
 
         btn_frame = tk.Frame(dialog)
-        btn_frame.grid(row=15, column=0, columnspan=2, pady=(8, 12))
+        btn_frame.grid(row=16, column=0, columnspan=2, pady=(8, 12))
         tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
         tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
 
@@ -3743,6 +3148,7 @@ print(json.dumps(summary, ensure_ascii=False))
         destination_folder = dialog_result['destination_folder']
         granularities = dialog_result['granularities']
         percentiles = dialog_result['percentiles']
+        run_in_background = bool(dialog_result.get('run_in_background', False))
 
         try:
             previous = {}
@@ -3753,6 +3159,7 @@ print(json.dumps(summary, ensure_ascii=False))
             previous['percentile_output_folder'] = destination_folder
             previous['percentile_granularity'] = granularities
             previous['percentile_values'] = percentiles
+            previous['percentile_background'] = run_in_background
             with open(post_process_path, 'w', encoding='utf-8') as _f:
                 json.dump(previous, _f, indent=2, ensure_ascii=False)
         except Exception:
@@ -3767,15 +3174,27 @@ print(json.dumps(summary, ensure_ascii=False))
         self.log_message(f"Destinazione: {destination_folder}")
         self.log_message(f"Granularità selezionate: {', '.join(granularities)}")
         self.log_message("Percentili selezionati: " + ", ".join(f"P{_fmt_percentile(value)}" for value in percentiles))
+        self.log_message(
+            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            if run_in_background else
+            "Modalità esecuzione: foreground (monitorata dalla UI)"
+        )
+
+        if run_in_background:
+            messagebox.showwarning(
+                "Attenzione",
+                "Il calcolo percentili verrà sottomesso in background con bsub -q pmten.\n"
+                "Il lavoro non sarà monitorato dalla UI."
+            )
 
         thread = threading.Thread(
             target=self._launch_percentile_thread,
-            args=(source_folder, destination_folder, granularities, percentiles)
+            args=(source_folder, destination_folder, granularities, percentiles, run_in_background)
         )
         thread.daemon = True
         thread.start()
 
-    def _launch_percentile_thread(self, source_folder, destination_folder, granularities, percentiles):
+    def _launch_percentile_thread(self, source_folder, destination_folder, granularities, percentiles, run_in_background=False):
         """Thread per calcolare percentili dai CSV aggregati"""
         jump_client = None
         target_client = None
@@ -3833,390 +3252,60 @@ print(json.dumps(summary, ensure_ascii=False))
             granularities_literal = json.dumps(granularities)
             percentiles_literal = json.dumps(percentiles)
 
-            remote_script = """from pathlib import Path
-import csv
-import json
-import re
-import sys
-
-source_root = Path(__SOURCE_ROOT__)
-destination_root = Path(__DESTINATION_ROOT__)
-granularities = __GRANULARITIES__
-percentiles = __PERCENTILES__
-
-if not source_root.is_dir():
-    print("ERRORE: cartella sorgente non trovata: " + str(source_root), file=sys.stderr)
-    raise SystemExit(10)
-
-destination_root.mkdir(parents=True, exist_ok=True)
-
-time_pattern = re.compile(r"^(?P<year>\\d{4})_M(?P<month>\\d{2})_D(?P<day>\\d{2})_")
-
-
-def parse_time_key(file_name):
-    match = time_pattern.search(file_name)
-    if not match:
-        return None
-    year = match.group('year')
-    month = match.group('month')
-    day = match.group('day')
-    return dict(
-        daily=f"{year}{month}{day}",
-        monthly=f"{year}{month}",
-        annual=year,
-    )
-
-
-def is_float(value):
-    try:
-        float(value)
-        return True
-    except Exception:
-        return False
-
-
-def normalized_name(value):
-    return value.strip().lower().replace(' ', '').replace('-', '_')
-
-
-def cleaned_cell(row, column_name):
-    value = row.get(column_name, '')
-    if value is None:
-        return ''
-    return str(value).strip()
-
-
-def detect_concentration_columns(fieldnames, sample_rows):
-    receptor_like = {
-        'x', 'y', 'x_km', 'y_km', 'xkm', 'ykm',
-        'receptor', 'recettore', 'id', 'lon', 'lat', 'longitude', 'latitude'
-    }
-    value_like = {'value', 'val', 'conc', 'concentration'}
-    candidates = []
-    for col in fieldnames:
-        lowered = normalized_name(col)
-        if lowered in receptor_like:
-            continue
-        if lowered in value_like or 'conc' in lowered or 'concentration' in lowered:
-            if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
-                candidates.append(col)
-
-    if candidates:
-        return candidates
-
-    numeric_cols = []
-    for col in fieldnames:
-        lowered = normalized_name(col)
-        if lowered in receptor_like:
-            continue
-        if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
-            numeric_cols.append(col)
-
-    if numeric_cols:
-        return [numeric_cols[-1]]
-
-    return []
-
-
-def sort_key_columns(key_cols):
-    preferred = ['x_km', 'y_km', 'x', 'y', 'receptor']
-    ordered = []
-    used = set()
-    normalized_lookup = {normalized_name(col): col for col in key_cols}
-    for pref in preferred:
-        if pref in normalized_lookup:
-            ordered.append(normalized_lookup[pref])
-            used.add(normalized_lookup[pref])
-    for col in key_cols:
-        if col not in used:
-            ordered.append(col)
-    return ordered
-
-
-def period_units(granularity):
-    if granularity == 'daily':
-        return 'hours/day processed'
-    if granularity == 'monthly':
-        return 'hours/month processed'
-    return 'hours/year processed'
-
-
-def report_title(granularity, percentile):
-    if abs(percentile - int(percentile)) < 1e-6:
-        perc_label = str(int(percentile))
-    else:
-        perc_label = f"{percentile:g}"
-    return (
-        f"        1   P{perc_label} {granularity.upper()} PERCENTILE "
-        "CONCENTRATION VALUES AT EACH RECEPTOR  (g/m**3)"
-    )
-
-
-def percentile_slug(percentile):
-    if abs(percentile - int(percentile)) < 1e-6:
-        return f"p{int(percentile)}"
-    return f"p{percentile:g}".replace('.', '_')
-
-
-def compute_percentile(values, percentile):
-    if not values:
-        return None
-    ordered = sorted(values)
-    size = len(ordered)
-    if size == 1:
-        return ordered[0]
-
-    rank = (percentile / 100.0) * (size - 1)
-    lower_idx = int(rank)
-    upper_idx = min(lower_idx + 1, size - 1)
-    weight = rank - lower_idx
-    return ordered[lower_idx] * (1.0 - weight) + ordered[upper_idx] * weight
-
-
-def find_csv_header_index(lines):
-    for idx, raw_line in enumerate(lines):
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        columns = [normalized_name(part) for part in stripped.split(',')]
-        if 'x_km' in columns and 'y_km' in columns and 'value' in columns:
-            return idx
-    return None
-
-
-def load_csv_dataset(csv_path):
-    with csv_path.open('r', encoding='utf-8', newline='') as handle:
-        lines = handle.readlines()
-
-    header_index = find_csv_header_index(lines)
-    if header_index is None:
-        return None
-
-    csv_content = ''.join(lines[header_index:])
-    reader = csv.DictReader(csv_content.splitlines())
-    fieldnames = reader.fieldnames or []
-    rows = [
-        row for row in reader
-        if any(cleaned_cell(row, col) for col in fieldnames)
-    ]
-
-    if not fieldnames or not rows:
-        return None
-
-    concentration_cols = detect_concentration_columns(fieldnames, rows[: min(25, len(rows))])
-    if not concentration_cols:
-        return None
-
-    key_cols = sort_key_columns([col for col in fieldnames if col not in concentration_cols])
-    row_map = {}
-    for row in rows:
-        key = tuple((col, row.get(col, '')) for col in key_cols)
-        concentrations = []
-        for conc_col in concentration_cols:
-            raw_value = cleaned_cell(row, conc_col)
-            if not raw_value:
-                concentrations.append(None)
-            else:
-                try:
-                    concentrations.append(float(raw_value))
-                except Exception:
-                    concentrations.append(None)
-        row_map[key] = dict(
-            meta={col: row.get(col, '') for col in key_cols},
-            values=concentrations,
-        )
-
-    return dict(
-        fieldnames=fieldnames,
-        key_cols=key_cols,
-        concentration_cols=concentration_cols,
-        row_map=row_map,
-    )
-
-
-def merge_period(files_for_period, percentile_values):
-    datasets = []
-    warnings = []
-    skipped = []
-
-    for file_path in files_for_period:
-        dataset = load_csv_dataset(file_path)
-        if dataset is None:
-            skipped.append(file_path.name)
-            continue
-        datasets.append((file_path, dataset))
-
-    if not datasets:
-        return None, warnings, skipped
-
-    base_file, base_dataset = datasets[0]
-    concentration_cols = list(base_dataset['concentration_cols'])
-    key_cols = list(base_dataset['key_cols'])
-
-    intersection = set(base_dataset['row_map'].keys())
-    valid_datasets = [(base_file, base_dataset)]
-
-    for file_path, dataset in datasets[1:]:
-        if dataset['concentration_cols'] != concentration_cols or dataset['key_cols'] != key_cols:
-            skipped.append(file_path.name)
-            warnings.append(f"Schema non compatibile, file ignorato: {file_path.name}")
-            continue
-        intersection &= set(dataset['row_map'].keys())
-        valid_datasets.append((file_path, dataset))
-
-    if not valid_datasets:
-        return None, warnings, skipped
-
-    if len(intersection) < len(valid_datasets[0][1]['row_map']):
-        warnings.append(
-            f"Griglia non allineata: uso intersezione righe ({len(intersection)} recettori)"
-        )
-
-    ordered_keys = [k for k in valid_datasets[0][1]['row_map'].keys() if k in intersection]
-    if not ordered_keys:
-        return None, warnings, skipped
-
-    rows_by_percentile = {pct: [] for pct in percentile_values}
-    for key in ordered_keys:
-        meta = dict(valid_datasets[0][1]['row_map'][key]['meta'])
-
-        per_concentration_values = []
-        for idx, conc_col in enumerate(concentration_cols):
-            values = []
-            for _, dataset in valid_datasets:
-                value = dataset['row_map'][key]['values'][idx]
-                if value is not None:
-                    values.append(value)
-            per_concentration_values.append(values)
-
-        for pct in percentile_values:
-            output_row = dict(meta)
-            for idx, conc_col in enumerate(concentration_cols):
-                pct_value = compute_percentile(per_concentration_values[idx], pct)
-                if pct_value is None:
-                    output_row[conc_col] = ''
-                else:
-                    output_row[conc_col] = f"{pct_value:.6f}"
-            rows_by_percentile[pct].append(output_row)
-
-    fieldnames_out = key_cols + concentration_cols
-    return dict(
-        fieldnames=fieldnames_out,
-        rows_by_percentile=rows_by_percentile,
-        files_used=len(valid_datasets),
-    ), warnings, skipped
-
-
-parameter_dirs = sorted([path for path in source_root.iterdir() if path.is_dir()], key=lambda p: p.name.lower())
-if not parameter_dirs:
-    print("ERRORE: nessuna sottocartella parametro trovata in " + str(source_root), file=sys.stderr)
-    raise SystemExit(11)
-
-summary = dict(
-    source_root=str(source_root),
-    destination_root=str(destination_root),
-    requested_granularity=granularities,
-    requested_percentiles=percentiles,
-    parameters_processed=0,
-    outputs_created=0,
-    warnings=[],
-    skipped_files=[],
-    details={},
-)
-
-for parameter_dir in parameter_dirs:
-    csv_files = sorted(
-        [path for path in parameter_dir.iterdir() if path.is_file() and path.suffix.lower() == '.csv'],
-        key=lambda p: p.name.lower()
-    )
-    if not csv_files:
-        continue
-
-    parameter_name = parameter_dir.name
-    summary['parameters_processed'] += 1
-    summary['details'][parameter_name] = {}
-
-    grouped = dict(daily={}, monthly={}, annual={})
-    unparsable = []
-    for file_path in csv_files:
-        time_key = parse_time_key(file_path.name)
-        if not time_key:
-            unparsable.append(file_path.name)
-            continue
-        for gran in ('daily', 'monthly', 'annual'):
-            grouped[gran].setdefault(time_key[gran], []).append(file_path)
-
-    if unparsable:
-        summary['warnings'].append(
-            f"{parameter_name}: file con nome non riconosciuto ignorati ({len(unparsable)})"
-        )
-        summary['skipped_files'].extend(unparsable)
-
-    for granularity in granularities:
-        periods = grouped.get(granularity, {})
-        if not periods:
-            summary['warnings'].append(f"{parameter_name}/{granularity}: nessun periodo disponibile")
-            continue
-
-        granularity_dir = destination_root / parameter_name / granularity.upper()
-        granularity_dir.mkdir(parents=True, exist_ok=True)
-
-        gran_created = 0
-        for period_key in sorted(periods.keys()):
-            files_for_period = periods[period_key]
-            result, period_warnings, period_skipped = merge_period(files_for_period, percentiles)
-
-            if period_warnings:
-                for warning in period_warnings:
-                    summary['warnings'].append(
-                        f"{parameter_name}/{granularity}/{period_key}: {warning}"
-                    )
-            if period_skipped:
-                summary['skipped_files'].extend(period_skipped)
-
-            if result is None:
-                summary['warnings'].append(
-                    f"{parameter_name}/{granularity}/{period_key}: periodo saltato (dati non validi)"
+            remote_script = self._render_script_template(
+                "python/calc_percentile.py.template",
+                {
+                    "TPL_SOURCE_ROOT_LITERAL": source_root_literal,
+                    "TPL_DESTINATION_ROOT_LITERAL": destination_root_literal,
+                    "TPL_GRANULARITIES_LITERAL": granularities_literal,
+                    "TPL_PERCENTILES_LITERAL": percentiles_literal,
+                },
+            )
+
+            if run_in_background:
+                target_client.exec_command(f'mkdir -p "{destination_root}"')
+                script_path = f"{work_folder}/run_percentile_background.sh"
+                bsub_out = f"{destination_root}/percentile_output.log"
+                bsub_err = f"{destination_root}/percentile_error.log"
+                wrapper_script = "#!/bin/bash\nset -e\npython3 - <<'PY'\n" + remote_script + "\nPY\n"
+
+                self.log_message("Creazione script remoto percentili (background)...")
+                sftp = target_client.open_sftp()
+                with sftp.open(script_path, 'w') as script_file:
+                    script_file.write(wrapper_script)
+                sftp.close()
+
+                target_client.exec_command(f'chmod +x "{script_path}"')
+                target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
+
+                bsub_command = (
+                    f'cd "{work_folder}"; '
+                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
                 )
-                continue
+                stdin, stdout, stderr = target_client.exec_command(bsub_command)
+                output = stdout.read().decode().strip()
+                error = stderr.read().decode().strip()
+                exit_status = stdout.channel.recv_exit_status()
 
-            for percentile in percentiles:
-                output_name = f"percentile_{percentile_slug(percentile)}_{granularity}_{period_key}.csv"
-                output_path = granularity_dir / output_name
-                with output_path.open('w', encoding='utf-8', newline='') as out_handle:
-                    out_handle.write(report_title(granularity, percentile) + "\\n\\n")
-                    out_handle.write(f"                   {parameter_name}          1\\n")
-                    out_handle.write(f"                   ({result['files_used']} {period_units(granularity)})\\n")
-                    out_handle.write("RECEPTOR\\n")
-                    writer = csv.DictWriter(out_handle, fieldnames=result['fieldnames'], lineterminator='\\n')
-                    writer.writeheader()
-                    out_handle.write(" \\n")
-                    writer.writerows(result['rows_by_percentile'][percentile])
+                if output:
+                    self.log_message(f"Output bsub percentili:\n{output}")
+                if error:
+                    self.log_message(f"Stderr bsub percentili:\n{error}")
 
-                gran_created += 1
-                summary['outputs_created'] += 1
+                if exit_status != 0:
+                    raise RuntimeError(error or f"Sottomissione percentili fallita con exit code {exit_status}")
 
-            if granularity == 'daily' and len(files_for_period) < 24:
-                summary['warnings'].append(
-                    f"{parameter_name}/{granularity}/{period_key}: copertura oraria incompleta ({len(files_for_period)} file)"
+                self.log_message("\n✓ Job percentili sottomesso in background!")
+                self.log_message(f"Log output: {bsub_out}")
+                self.log_message(f"Log errori: {bsub_err}")
+                messagebox.showwarning(
+                    "Job Percentili Sottomesso",
+                    "Job percentili sottomesso con bsub -q pmten.\n\n"
+                    "Il lavoro non è monitorato dalla UI.\n"
+                    f"Controlla i log:\n{bsub_out}\n{bsub_err}"
                 )
+                return
 
-        summary['details'][parameter_name][granularity] = dict(
-            periods_found=len(periods),
-            outputs_created=gran_created,
-            percentiles=len(percentiles),
-        )
-
-summary_path = destination_root / 'percentile_summary.json'
-with summary_path.open('w', encoding='utf-8') as summary_handle:
-    json.dump(summary, summary_handle, indent=2, ensure_ascii=False)
-
-print(json.dumps(summary, ensure_ascii=False))
-"""
-            remote_script = remote_script.replace('__SOURCE_ROOT__', source_root_literal)
-            remote_script = remote_script.replace('__DESTINATION_ROOT__', destination_root_literal)
-            remote_script = remote_script.replace('__GRANULARITIES__', granularities_literal)
-            remote_script = remote_script.replace('__PERCENTILES__', percentiles_literal)
             remote_command = "python3 - <<'PY'\n" + remote_script + "\nPY"
 
             self.log_message("Esecuzione calcolo percentili sul server...")

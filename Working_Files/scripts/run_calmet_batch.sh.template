@@ -1,0 +1,111 @@
+#!/bin/bash
+
+WORKING_FOLDER="${TPL_WORK_FOLDER}"
+CALMET_DIR="${TPL_CALMET_DIR}"
+WRF_PATH="${TPL_WRF_PATH}"
+CALMET_DATA_DIR="${TPL_CALMET_DATA_DIR}"
+METDATA="${TPL_CALMET_DATA}"
+WRF_LINK_MODE="${TPL_WRF_LINK_MODE}"
+
+echo "=== Avvio batch CALMET ==="
+echo "Working folder: ${WORKING_FOLDER}"
+echo "CALMET dir: ${CALMET_DIR}"
+echo "WRF path: ${WRF_PATH}"
+echo "Output dir: ${CALMET_DATA_DIR}"
+
+# Carica ambiente Intel Fortran Compiler
+echo "Caricamento ambiente Intel Fortran..."
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo "✓ Intel Fortran environment caricato"
+else
+    echo "⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi..."
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d "/opt/intel/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+    if [ -d "/opt/intel/compilers_and_libraries/linux/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+fi
+
+# Setup librerie NetCDF
+export LD_LIBRARY_PATH="/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH"
+
+mkdir -p "${CALMET_DATA_DIR}"
+
+shopt -s nullglob
+mapfile -t INP_FILES < <(find "${WORKING_FOLDER}" -maxdepth 2 -type f -path "${WORKING_FOLDER}/CALMET_INP*/*.inp" | sort)
+
+if [ ${#INP_FILES[@]} -eq 0 ]; then
+    echo "ERRORE: nessun file .inp trovato in CALMET_INP*"
+    exit 10
+fi
+
+echo "File INP trovati: ${#INP_FILES[@]}"
+
+for INP_FILE in "${INP_FILES[@]}"; do
+    INP_NAME=$(basename "${INP_FILE}")
+    INP_BASENAME="${INP_NAME%.inp}"
+
+    if [[ "${INP_BASENAME}" =~ ([0-9]{8}) ]]; then
+        DATE_YYYYMMDD="${BASH_REMATCH[1]}"
+    else
+        echo "WARNING: data non trovata nel nome file ${INP_NAME} -> salto"
+        continue
+    fi
+
+    YEAR="${DATE_YYYYMMDD:0:4}"
+    MONTH="${DATE_YYYYMMDD:4:2}"
+    DAY="${DATE_YYYYMMDD:6:2}"
+    DATE_DASH="${YEAR}-${MONTH}-${DAY}"
+    DATE_C="${YEAR}${MONTH}${DAY}"
+
+    echo "--------------------------------------------------"
+    echo "Elaborazione: ${INP_NAME} (data ${DATE_DASH})"
+
+    cp "${INP_FILE}" "${CALMET_DIR}/calmet.inp"
+    WRF_FILES=("${WRF_PATH}"/wrf_"${DATE_C}"_*.m2d "${WRF_PATH}"/wrf_"${DATE_C}"_*.m3d)
+    if [ ${#WRF_FILES[@]} -eq 0 ]; then
+        echo "⚠ ERRORE: nessun file WRF trovato per data ${DATE_DASH} in ${WRF_PATH}"
+        echo "Continuazione con prossimo file..."
+        continue
+    fi
+
+    if [ "${WRF_LINK_MODE}" = "ln -sf" ]; then
+        for wrf_file in "${WRF_FILES[@]}"; do
+            ln -sf "${wrf_file}" "${CALMET_DIR}/"
+        done
+    else
+        cp "${WRF_FILES[@]}" "${CALMET_DIR}/"
+    fi
+
+    cd "${CALMET_DIR}"
+    RUN_LOG="${CALMET_DATA_DIR}/${INP_BASENAME}.log"
+    RUN_ERR="${CALMET_DATA_DIR}/${INP_BASENAME}.err"
+
+    ./calmet.exe calmet.inp > "${RUN_LOG}" 2> "${RUN_ERR}"
+    RUN_STATUS=$?
+    if [ ${RUN_STATUS} -ne 0 ]; then
+        echo "⚠ ERRORE: calmet.exe fallito per ${INP_NAME} (exit ${RUN_STATUS})"
+        echo "Continuazione con prossimo file..."
+    else
+        EXPECTED_DAT=$(find "${CALMET_DIR}" -maxdepth 1 -type f \( -iname "${METDATA}_${DATE_C}.dat" -o -iname "calmet.dat" \) | head -n 1)
+        if [ -n "${EXPECTED_DAT}" ]; then
+            cp "${EXPECTED_DAT}" "${CALMET_DATA_DIR}/${INP_BASENAME}.dat"
+        else
+            echo "⚠ WARNING: file .dat non trovato (atteso: ${METDATA}_${DATE_C}.dat, case-insensitive)"
+        fi
+        if [ -f "${CALMET_DIR}/list.lst" ]; then
+            cp "${CALMET_DIR}/list.lst" "${CALMET_DATA_DIR}/${INP_BASENAME}.lst"
+        fi
+        echo "✓ Completato: ${INP_NAME}"
+    fi
+
+    # Pulizia file WRF utilizzati
+    echo "Pulizia file WRF..."
+    rm -f "${CALMET_DIR}"/wrf_*.m2d "${CALMET_DIR}"/wrf_*.m3d
+    echo "✓ File WRF rimossi"
+done
+
+echo "=== Batch CALMET completato ==="

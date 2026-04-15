@@ -48,6 +48,24 @@ Il dominio viene salvato in `temp_config/domain_config.json` con la seguente str
 - `domain_window.py`: Finestra per definire il dominio geografico
 - `temp_config/`: Directory per i file di configurazione temporanei
 
+### Template Script Farm
+
+Per rendere il codice della UI piu compatto e facilmente modificabile, gli script remoti non sono piu hardcoded nella finestra operazioni Farm ma caricati da file template sotto `Working_Files/scripts/`.
+
+- `Working_Files/scripts/run_geographic.sh.template`
+- `Working_Files/scripts/run_calmet_batch.sh.template`
+- `Working_Files/scripts/run_calpuff_batch.sh.template`
+- `Working_Files/scripts/run_calpost_batch.sh.template`
+- `Working_Files/scripts/python/aggregate_csv.py.template`
+- `Working_Files/scripts/python/calc_mean.py.template`
+- `Working_Files/scripts/python/calc_percentile.py.template`
+
+Convenzioni placeholder:
+
+- I placeholder della UI usano il formato `${TPL_*}`.
+- I placeholder shell nativi (es. `${WORKING_FOLDER}`) restano invariati.
+- Se un placeholder `${TPL_*}` rimane non risolto, la UI genera un errore esplicito.
+
 ## Sviluppi Futuri
 
 - Aggiunta di ulteriori configurazioni (meteo, emissioni, etc.)

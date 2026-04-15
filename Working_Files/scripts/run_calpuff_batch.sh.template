@@ -1,0 +1,142 @@
+#!/bin/bash
+
+WORKING_FOLDER="${TPL_WORK_FOLDER}"
+CALPUFF_DIR="${TPL_CALPUFF_DIR}"
+CALPUFF_DATA_DIR="${TPL_CALPUFF_DATA_DIR}"
+CALMET_DATA_DIR="${TPL_CALMET_DATA_DIR}"
+CALMET_LINK_MODE="${TPL_CALMET_LINK_MODE}"
+
+echo "=== Avvio batch CALPUFF ==="
+echo "Working folder: ${WORKING_FOLDER}"
+echo "CALPUFF dir: ${CALPUFF_DIR}"
+echo "Output dir: ${CALPUFF_DATA_DIR}"
+echo "CALMET data dir: ${CALMET_DATA_DIR}"
+echo "Modalità meteo CALMET→CALPUFF: ${CALMET_LINK_MODE}"
+
+# Carica ambiente Intel Fortran Compiler
+echo "Caricamento ambiente Intel Fortran..."
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo "✓ Intel Fortran environment caricato"
+else
+    echo "⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi..."
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d "/opt/intel/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+    if [ -d "/opt/intel/compilers_and_libraries/linux/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+fi
+
+# Setup librerie NetCDF
+export LD_LIBRARY_PATH="/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH"
+
+mkdir -p "${CALPUFF_DATA_DIR}"
+
+shopt -s nullglob
+mapfile -t INP_FILES < <(find "${WORKING_FOLDER}" -maxdepth 2 -type f -path "${WORKING_FOLDER}/CALPUFF_INP*/*.inp" | sort)
+
+if [ ${#INP_FILES[@]} -eq 0 ]; then
+    echo "ERRORE: nessun file .inp trovato in CALPUFF_INP*"
+    exit 10
+fi
+
+if [ -x "${CALPUFF_DIR}/calpuff.exe" ]; then
+    CALPUFF_EXE="${CALPUFF_DIR}/calpuff.exe"
+else
+    mapfile -t CALPUFF_EXE_CANDIDATES < <(find "${CALPUFF_DIR}" -maxdepth 1 -type f -name "calpuff*.exe" | sort)
+    if [ ${#CALPUFF_EXE_CANDIDATES[@]} -eq 0 ]; then
+        echo "ERRORE: eseguibile CALPUFF non trovato in ${CALPUFF_DIR}"
+        exit 11
+    fi
+    CALPUFF_EXE="${CALPUFF_EXE_CANDIDATES[0]}"
+fi
+
+echo "Eseguibile CALPUFF: ${CALPUFF_EXE}"
+echo "File INP trovati: ${#INP_FILES[@]}"
+
+for INP_FILE in "${INP_FILES[@]}"; do
+    INP_NAME=$(basename "${INP_FILE}")
+    INP_BASENAME="${INP_NAME%.inp}"
+
+    echo "--------------------------------------------------"
+    echo "Elaborazione: ${INP_NAME}"
+
+    cp "${INP_FILE}" "${CALPUFF_DIR}/calpuff.inp"
+
+    DATE_C=""
+    if [[ "${INP_BASENAME}" =~ ([0-9]{8}) ]]; then
+        DATE_C="${BASH_REMATCH[1]}"
+    fi
+
+    CALMET_DAT_SOURCE=""
+    if [ -n "${DATE_C}" ] && [ -f "${CALMET_DATA_DIR}/calmet_${DATE_C}.dat" ]; then
+        CALMET_DAT_SOURCE="${CALMET_DATA_DIR}/calmet_${DATE_C}.dat"
+    elif [ -f "${CALMET_DATA_DIR}/${INP_BASENAME}.dat" ]; then
+        CALMET_DAT_SOURCE="${CALMET_DATA_DIR}/${INP_BASENAME}.dat"
+    elif [ -n "${DATE_C}" ]; then
+        mapfile -t CALMET_DAT_CANDIDATES < <(find "${CALMET_DATA_DIR}" -maxdepth 1 -type f -iname "*${DATE_C}*.dat" | sort)
+        if [ ${#CALMET_DAT_CANDIDATES[@]} -gt 0 ]; then
+            CALMET_DAT_SOURCE="${CALMET_DAT_CANDIDATES[0]}"
+        fi
+    fi
+
+    if [ -z "${CALMET_DAT_SOURCE}" ]; then
+        echo "⚠ ERRORE: file CALMET .dat non trovato per ${INP_NAME} in ${CALMET_DATA_DIR}"
+        echo "Continuazione con prossimo file..."
+        continue
+    fi
+
+    CALMET_DAT_BASENAME=$(basename "${CALMET_DAT_SOURCE}")
+    if [ -n "${DATE_C}" ]; then
+        CALMET_DAT_TARGET="CALMET_${DATE_C}.DAT"
+    else
+        CALMET_DAT_TARGET=$(echo "${CALMET_DAT_BASENAME}" | tr '[:lower:]' '[:upper:]')
+    fi
+    rm -f "${CALPUFF_DIR}/calmet.dat" "${CALPUFF_DIR}/calmet_"*.dat "${CALPUFF_DIR}/CALMET_"*.DAT
+    if [ "${CALMET_LINK_MODE}" = "ln -sf" ]; then
+        ln -sf "${CALMET_DAT_SOURCE}" "${CALPUFF_DIR}/${CALMET_DAT_TARGET}"
+    else
+        cp "${CALMET_DAT_SOURCE}" "${CALPUFF_DIR}/${CALMET_DAT_TARGET}"
+    fi
+    echo "Meteo associato: ${CALMET_DAT_TARGET} (sorgente: ${CALMET_DAT_BASENAME})"
+
+    cd "${CALPUFF_DIR}"
+    RUN_LOG="${CALPUFF_DATA_DIR}/${INP_BASENAME}.log"
+    RUN_ERR="${CALPUFF_DATA_DIR}/${INP_BASENAME}.err"
+
+    "${CALPUFF_EXE}" calpuff.inp > "${RUN_LOG}" 2> "${RUN_ERR}"
+    RUN_STATUS=$?
+    if [ ${RUN_STATUS} -ne 0 ]; then
+        echo "⚠ ERRORE: calpuff fallito per ${INP_NAME} (exit ${RUN_STATUS})"
+        echo "Continuazione con prossimo file..."
+    else
+        for OUTPUT_FILE in CALPUFFOUTPUT_*.*; do
+            if [ -f "${OUTPUT_FILE}" ]; then
+                cp -f "${OUTPUT_FILE}" "${CALPUFF_DATA_DIR}/${OUTPUT_FILE}"
+                sleep 2
+                if [ -f "${CALPUFF_DATA_DIR}/${OUTPUT_FILE}" ]; then
+                    rm -f "${OUTPUT_FILE}"
+                fi
+                sleep 2
+            fi
+        done
+        echo "✓ Completato: ${INP_NAME}"
+        sleep 2
+    fi
+done
+
+for RESTART_FILE in "${CALPUFF_DIR}"/RESTART*.DAT; do
+    if [ -f "${RESTART_FILE}" ]; then
+        RESTART_BASENAME=$(basename "${RESTART_FILE}")
+        cp -f "${RESTART_FILE}" "${CALPUFF_DATA_DIR}/${RESTART_BASENAME}"
+        sleep 2
+        if [ -f "${CALPUFF_DATA_DIR}/${RESTART_BASENAME}" ]; then
+            rm -f "${RESTART_FILE}"
+        fi
+        sleep 2
+    fi
+done
+
+echo "=== Batch CALPUFF completato ==="

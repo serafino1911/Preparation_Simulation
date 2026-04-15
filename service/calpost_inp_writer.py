@@ -211,6 +211,9 @@ def generate_daily_calpost_files(
         
         # Genera un file CALPOST per ogni ora del giorno (24 ore)
         for hour in range(24):
+            if hour == 23:
+                day_token_next = (current_date + timedelta(days=1)).strftime('%Y%m%d')
+                calpuff_name = f'{calpuff_output_base}_{day_token_next}.CON'
             calpost_writer(
                 calpuff_name=calpuff_name,
                 j=hour,

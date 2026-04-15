@@ -1,0 +1,64 @@
+#!/bin/bash
+set -e
+
+echo "=== Inizio elaborazione geografica ==="
+
+# Carica ambiente Intel Fortran Compiler
+echo "Caricamento ambiente Intel Fortran..."
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo "✓ Intel Fortran environment caricato"
+else
+    echo "⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi..."
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d "/opt/intel/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+    if [ -d "/opt/intel/compilers_and_libraries/linux/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+fi
+
+# Setup librerie NetCDF
+export LD_LIBRARY_PATH="/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH"
+
+cd ${TPL_WORKING_FOLDER}
+
+# Step 1: TERREL
+echo "Step 1/3: Esecuzione TERREL..."
+cd TERREL
+${TPL_TERREL_EXE} terrel.inp
+if [ $? -ne 0 ]; then
+    echo "ERRORE: TERREL fallito"
+    exit 1
+fi
+echo "✓ TERREL completato"
+
+# Step 2: CTGPROC
+echo "Step 2/3: Esecuzione CTGPROC..."
+cd ${TPL_WORKI_FOLDER}/CTGPROC
+${TPL_CTGPROC_EXE} ctgproc.inp
+if [ $? -ne 0 ]; then
+    echo "ERRORE: CTGPROC fallito"
+    exit 2
+fi
+echo "✓ CTGPROC completato"
+
+# Step 3: Copia output TERREL e CTGPROC in MAKEGEO
+echo "Copia output per MAKEGEO..."
+cd ${TPL_WORKING_FOLDER}
+cp TERREL/terrel.dat MAKEGEO_V3.2_L110401/terrel.dat
+cp CTGPROC/luse.dat MAKEGEO_V3.2_L110401/luse.dat
+echo "✓ Output copiati"
+
+# Step 4: MAKEGEO
+echo "Step 3/3: Esecuzione MAKEGEO..."
+cd ${TPL_WORKI_FOLDER}/MAKEGEO_V3.2_L110401
+${TPL_MAKEGEO_EXE} makegeo.inp
+if [ $? -ne 0 ]; then
+    echo "ERRORE: MAKEGEO fallito"
+    exit 3
+fi
+echo "✓ MAKEGEO completato"
+
+echo "=== Elaborazione geografica completata con successo ==="
