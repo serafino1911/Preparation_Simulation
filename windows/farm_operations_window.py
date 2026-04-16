@@ -5,10 +5,12 @@ Finestra per le operazioni sul Farm remoto
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import threading
 import os
 import re
+import stat
+import shlex
 from service.ctgproc_inp_writer import generate_ctgproc_inp
 from service.makegeo_inp_writer import generate_makegeo_inp
 from service.terrel_inp_writer import generate_terrel_inp
@@ -336,6 +338,7 @@ class FarmOperationsWindow:
         button_frame.grid(row=7, column=0, sticky=(tk.W, tk.E))
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
+        button_frame.columnconfigure(2, weight=1)
         
         # Pulsante Test Connessione
         test_conn_btn = ttk.Button(
@@ -352,6 +355,14 @@ class FarmOperationsWindow:
             command=self.clear_log
         )
         clear_log_btn.grid(row=0, column=1, padx=(5, 0), sticky=(tk.W, tk.E))
+
+        # Pulsante Permissions
+        permissions_btn = ttk.Button(
+            button_frame,
+            text="🔒 Permissions",
+            command=self.open_permissions_dialog
+        )
+        permissions_btn.grid(row=0, column=2, padx=(5, 0), sticky=(tk.W, tk.E))
         
         # Log iniziale
         self.log_message("Finestra operazioni farm inizializzata.")
@@ -368,6 +379,233 @@ class FarmOperationsWindow:
     def clear_log(self):
         """Pulisce il log"""
         self.log_text.delete(1.0, tk.END)
+
+    def _get_permissions_folder_choices(self):
+        """Restituisce le opzioni cartelle remote suggerite per chmod."""
+        folders = []
+        jump_client = None
+        target_client = None
+
+        if not PARAMIKO_AVAILABLE:
+            return ['ALL']
+
+        if not self.farm_config:
+            return ['ALL']
+
+        if not self.jump_password.get():
+            return ['ALL']
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            return ['ALL']
+
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            working_folder = str(self.farm_config.get('working_folder', '/project/pmten/simulations/')).rstrip('/')
+            if not working_folder:
+                return ['ALL']
+
+            sftp = target_client.open_sftp()
+            try:
+                for entry in sftp.listdir_attr(working_folder):
+                    if not stat.S_ISDIR(entry.st_mode):
+                        continue
+                    if entry.filename.startswith('.'):
+                        continue
+                    if entry.filename in {'__pycache__', '.venv'}:
+                        continue
+                    folders.append(entry.filename)
+            finally:
+                sftp.close()
+
+        except Exception as exc:
+            self.log_message(f"Warning: impossibile leggere le cartelle remote per Permissions ({exc})")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
+
+        return ['ALL'] + sorted(set(folders))
+
+    def open_permissions_dialog(self):
+        """Apre dialog per assegnare permessi ricorsivi su cartelle remote."""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Permissions")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        dialog.transient(self.window)
+
+        folder_choices = self._get_permissions_folder_choices()
+        folder_var = tk.StringVar(value='ALL')
+        permission_var = tk.StringVar(value='777')
+        background_var = tk.BooleanVar(value=False)
+        dialog_result = {}
+
+        tk.Label(
+            dialog,
+            text="Seleziona cartella nel working folder (o ALL):",
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=0, column=0, sticky='w', padx=12, pady=(12, 2))
+
+        folder_combo = ttk.Combobox(
+            dialog,
+            textvariable=folder_var,
+            values=folder_choices,
+            state='normal',
+            width=32
+        )
+        folder_combo.grid(row=1, column=0, sticky='w', padx=24, pady=(0, 10))
+
+        tk.Label(
+            dialog,
+            text="Permesso numerico (es. 777):",
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=2, column=0, sticky='w', padx=12, pady=(2, 2))
+
+        tk.Entry(dialog, textvariable=permission_var, width=12).grid(
+            row=3, column=0, sticky='w', padx=24, pady=(0, 10)
+        )
+
+        tk.Checkbutton(
+            dialog,
+            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            variable=background_var
+        ).grid(row=4, column=0, sticky='w', padx=24, pady=(0, 10))
+
+        def _on_ok():
+            target_value = folder_var.get().strip()
+            permission_value = permission_var.get().strip()
+
+            if not target_value:
+                messagebox.showerror("Errore", "Specifica almeno una cartella o ALL.", parent=dialog)
+                return
+
+            if not re.fullmatch(r"[0-7]{3,4}", permission_value):
+                messagebox.showerror("Errore", "Il permesso deve essere numerico (3 o 4 cifre, solo 0-7).", parent=dialog)
+                return
+
+            targets = [chunk.strip() for chunk in target_value.split(',') if chunk.strip()]
+            if not targets:
+                messagebox.showerror("Errore", "Specifica almeno una cartella valida.", parent=dialog)
+                return
+
+            forbidden_chars = set(';|&`$<>\n\r')
+            if any(any(char in forbidden_chars for char in target) for target in targets):
+                messagebox.showerror("Errore", "Nome cartella non valido.", parent=dialog)
+                return
+
+            run_all = any(target.upper() == 'ALL' for target in targets)
+            run_in_background = bool(background_var.get())
+            working_folder = str(self.farm_config.get('working_folder', '/project/pmten/simulations/')).strip()
+            work_folder = working_folder.rstrip('/')
+            if not work_folder:
+                messagebox.showerror("Errore", "working_folder non configurata.", parent=dialog)
+                return
+
+            if run_all:
+                working_path = PurePosixPath(working_folder.rstrip('/'))
+                if not working_path.name:
+                    messagebox.showerror("Errore", "working_folder non valida per l'operazione ALL.", parent=dialog)
+                    return
+
+                parent_folder = str(working_path.parent)
+                working_name = working_path.name
+                chmod_command = f'cd "{parent_folder}" && chmod -R {permission_value} "{working_name}"'
+                operation_name = f"Permissions ALL ({working_name})"
+            else:
+                chmod_command = ' && '.join([f'chmod -R {permission_value} "{target}"' for target in targets])
+                operation_name = "Permissions folders"
+
+            command = chmod_command
+            log_output = None
+            log_error = None
+            if run_in_background:
+                log_output = f"{work_folder}/permissions_output.log"
+                log_error = f"{work_folder}/permissions_error.log"
+                command = (
+                    f'rm -f {shlex.quote(log_output)} {shlex.quote(log_error)} ; '
+                    f'bsub -q pmten -o {shlex.quote(log_output)} -e {shlex.quote(log_error)} '
+                    f'/bin/bash -lc {shlex.quote(chmod_command)}'
+                )
+                operation_name = f"{operation_name} (background)"
+
+            dialog_result['command'] = command
+            dialog_result['operation_name'] = operation_name
+            dialog_result['targets'] = targets
+            dialog_result['permission'] = permission_value
+            dialog_result['run_in_background'] = run_in_background
+            dialog_result['log_output'] = log_output
+            dialog_result['log_error'] = log_error
+            dialog.destroy()
+
+        def _on_cancel():
+            dialog.destroy()
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.grid(row=5, column=0, pady=(0, 12))
+        tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
+        tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
+
+        self.window.wait_window(dialog)
+
+        if not dialog_result:
+            self.log_message("Operazione Permissions annullata dall'utente.")
+            return
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: Permissions")
+        self.log_message(f"Target: {', '.join(dialog_result['targets'])}")
+        self.log_message(f"Permesso: {dialog_result['permission']}")
+        if dialog_result.get('run_in_background'):
+            self.log_message("Modalità esecuzione: background (bsub -q pmten, job non monitorato)")
+            self.log_message(f"Log output: {dialog_result.get('log_output')}")
+            self.log_message(f"Log errori: {dialog_result.get('log_error')}")
+            messagebox.showwarning(
+                "Attenzione",
+                "L'operazione Permissions verrà sottomessa in background con bsub -q pmten.\n"
+                "Il lavoro non sarà monitorato dalla UI."
+            )
+        else:
+            self.log_message("Modalità esecuzione: foreground (monitorata dalla UI)")
+
+        self.execute_remote_command(dialog_result['command'], dialog_result['operation_name'])
     
     def toggle_target_password(self):
         """Mostra/nascondi il campo password target server"""
@@ -1346,11 +1584,287 @@ class FarmOperationsWindow:
         messagebox.showinfo("Info", "Funzione Launch Meteo da implementare")
     
     def launch_puntuale(self):
-        """Lancia elaborazione dati puntuali - DA IMPLEMENTARE"""
+        """Configura ed estrae serie temporali puntuali dai CSV aggregati sul farm"""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        try:
+            from windows.config_puntuale_window import ConfigPuntualeWindow
+        except Exception as import_error:
+            messagebox.showerror(
+                "Errore",
+                "Impossibile aprire la finestra di configurazione Puntuale.\n\n"
+                f"Dettagli: {import_error}"
+            )
+            return
+
+        dialog_result = ConfigPuntualeWindow.show_dialog(self.window, self.temp_dir)
+
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch Puntuale")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch Puntuale da implementare")
+
+        if not dialog_result:
+            self.log_message("Operazione annullata dall'utente.")
+            return
+
+        points = dialog_result.get('puntuale_points', [])
+        source_folder = str(dialog_result.get('puntuale_source_folder', 'AGGREG')).strip() or 'AGGREG'
+        output_folder = str(dialog_result.get('puntuale_output_folder', 'PUNTUALE')).strip() or 'PUNTUALE'
+        granularities = dialog_result.get('puntuale_granularity', [])
+        run_in_background = bool(dialog_result.get('puntuale_background', False))
+        include_raw = bool(dialog_result.get('puntuale_include_raw', True))
+
+        if not points:
+            messagebox.showerror("Errore", "Nessun punto selezionato per l'estrazione puntuale.")
+            return
+
+        if not source_folder:
+            messagebox.showerror("Errore", "La cartella sorgente non può essere vuota.")
+            return
+
+        if not output_folder:
+            messagebox.showerror("Errore", "La cartella destinazione non può essere vuota.")
+            return
+
+        self.log_message(f"Sorgente: {source_folder}")
+        self.log_message(f"Destinazione: {output_folder}")
+        self.log_message(f"Punti selezionati: {len(points)}")
+        self.log_message(f"Serie RAW: {'attive' if include_raw else 'disattive'}")
+        self.log_message(
+            "Granularità inferite: " + (', '.join(granularities) if granularities else "nessuna")
+        )
+        self.log_message(
+            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            if run_in_background else
+            "Modalità esecuzione: foreground (monitorata dalla UI)"
+        )
+
+        if run_in_background:
+            messagebox.showwarning(
+                "Attenzione",
+                "L'estrazione puntuale verrà sottomessa in background con bsub -q pmten.\n"
+                "Il lavoro non sarà monitorato dalla UI."
+            )
+
+        thread = threading.Thread(
+            target=self._launch_puntuale_thread,
+            args=(points, source_folder, output_folder, granularities, include_raw, run_in_background)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _launch_puntuale_thread(self, points, source_folder, output_folder, granularities, include_raw, run_in_background=False):
+        """Thread per estrarre serie temporali puntuali dai CSV aggregati"""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            source_root = source_folder if source_folder.startswith('/') else f"{work_folder}/{source_folder}"
+            destination_root = output_folder if output_folder.startswith('/') else f"{work_folder}/{output_folder}"
+
+            self.log_message("Verifica cartelle remote per estrazione puntuale...")
+            stdin, stdout, stderr = target_client.exec_command(
+                f'test -d "{source_root}" && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                raise RuntimeError(f"Cartella sorgente non trovata: {source_root}")
+
+            points_literal = json.dumps(points)
+            source_root_literal = json.dumps(source_root)
+            destination_root_literal = json.dumps(destination_root)
+            granularities_literal = json.dumps(granularities)
+            # Ensure Python boolean capitalization for template
+            include_raw_literal = "True" if include_raw else "False"
+
+            remote_script = self._render_script_template(
+                "python/calc_puntuale.py.template",
+                {
+                    "TPL_SOURCE_ROOT_LITERAL": source_root_literal,
+                    "TPL_DESTINATION_ROOT_LITERAL": destination_root_literal,
+                    "TPL_POINTS_LITERAL": points_literal,
+                    "TPL_GRANULARITIES_LITERAL": granularities_literal,
+                    "TPL_INCLUDE_RAW_LITERAL": include_raw_literal,
+                },
+            )
+
+            if run_in_background:
+                target_client.exec_command(f'mkdir -p "{destination_root}"')
+                script_path = f"{work_folder}/run_puntuale_background.sh"
+                bsub_out = f"{destination_root}/puntuale_output.log"
+                bsub_err = f"{destination_root}/puntuale_error.log"
+                wrapper_script = "#!/bin/bash\nset -e\npython3 - <<'PY'\n" + remote_script + "\nPY\n"
+
+                self.log_message("Creazione script remoto puntuale (background)...")
+                sftp = target_client.open_sftp()
+                with sftp.open(script_path, 'w') as script_file:
+                    script_file.write(wrapper_script)
+                sftp.close()
+
+                target_client.exec_command(f'chmod +x "{script_path}"')
+                target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
+
+                bsub_command = (
+                    f'cd "{work_folder}"; '
+                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                )
+                stdin, stdout, stderr = target_client.exec_command(bsub_command)
+                output = stdout.read().decode().strip()
+                error = stderr.read().decode().strip()
+                exit_status = stdout.channel.recv_exit_status()
+
+                if output:
+                    self.log_message(f"Output bsub puntuale:\n{output}")
+                if error:
+                    self.log_message(f"Stderr bsub puntuale:\n{error}")
+
+                if exit_status != 0:
+                    raise RuntimeError(error or f"Sottomissione puntuale fallita con exit code {exit_status}")
+
+                self.log_message("\n✓ Job puntuale sottomesso in background!")
+                self.log_message(f"Log output: {bsub_out}")
+                self.log_message(f"Log errori: {bsub_err}")
+                messagebox.showwarning(
+                    "Job Puntuale Sottomesso",
+                    "Job puntuale sottomesso con bsub -q pmten.\n\n"
+                    "Il lavoro non è monitorato dalla UI.\n"
+                    f"Controlla i log:\n{bsub_out}\n{bsub_err}"
+                )
+                return
+
+            remote_command = "python3 - <<'PY'\n" + remote_script + "\nPY"
+
+            self.log_message("Esecuzione estrazione puntuale sul server...")
+            stdin, stdout, stderr = target_client.exec_command(remote_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output puntuale:\n{output}")
+            if error:
+                self.log_message(f"Stderr puntuale:\n{error}")
+
+            if exit_status != 0:
+                raise RuntimeError(error or f"Estrazione puntuale fallita con exit code {exit_status}")
+
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            if not lines:
+                raise RuntimeError("Nessun riepilogo restituito dall'estrazione puntuale")
+
+            try:
+                summary = json.loads(lines[-1])
+            except json.JSONDecodeError as decode_error:
+                raise RuntimeError(f"Riepilogo puntuale non valido: {decode_error}") from decode_error
+
+            warnings = summary.get('warnings', [])
+            skipped = summary.get('skipped_files', [])
+            details = summary.get('details', {})
+
+            self.log_message("\n✓ Estrazione puntuale completata con successo!")
+            self.log_message(f"Sorgente: {summary.get('source_root', source_root)}")
+            self.log_message(f"Destinazione: {summary.get('destination_root', destination_root)}")
+            self.log_message(f"Punti processati: {summary.get('points_processed', 0)}")
+            self.log_message(f"Parametri processati: {summary.get('parameters_processed', 0)}")
+            self.log_message(f"File output creati: {summary.get('outputs_created', 0)}")
+
+            for key in sorted(details.keys()):
+                point_summary = details[key]
+                self.log_message(
+                    f"  - {key}: raw={point_summary.get('raw_records', 0)}, "
+                    f"output={point_summary.get('outputs_created', 0)}"
+                )
+
+            if warnings:
+                self.log_message(f"Warning ({len(warnings)}):")
+                for warning in warnings[:20]:
+                    self.log_message(f"  * {warning}")
+                if len(warnings) > 20:
+                    self.log_message(f"  * ... altri {len(warnings) - 20} warning")
+
+            if skipped:
+                self.log_message(f"File saltati: {len(skipped)}")
+
+            messagebox.showinfo(
+                "Successo",
+                "Estrazione puntuale completata!\n\n"
+                f"Punti processati: {summary.get('points_processed', 0)}\n"
+                f"Parametri processati: {summary.get('parameters_processed', 0)}\n"
+                f"Output creati: {summary.get('outputs_created', 0)}\n"
+                f"Warning: {len(warnings)}"
+            )
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch Puntuale:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def load_inp_calmet(self):
         """Carica tutte le cartelle CALMET_INP* nel working folder del target server"""

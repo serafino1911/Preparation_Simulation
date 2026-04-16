@@ -1,0 +1,419 @@
+from pathlib import Path
+import csv
+import json
+import re
+import sys
+
+source_root = Path(${TPL_SOURCE_ROOT_LITERAL})
+destination_root = Path(${TPL_DESTINATION_ROOT_LITERAL})
+points = ${TPL_POINTS_LITERAL}
+granularities = ${TPL_GRANULARITIES_LITERAL}
+include_raw = ${TPL_INCLUDE_RAW_LITERAL}
+
+if not source_root.is_dir():
+    print("ERRORE: cartella sorgente non trovata: " + str(source_root), file=sys.stderr)
+    raise SystemExit(10)
+
+if not isinstance(points, list) or not points:
+    print("ERRORE: nessun punto selezionato", file=sys.stderr)
+    raise SystemExit(11)
+
+destination_root.mkdir(parents=True, exist_ok=True)
+
+filename_pattern = re.compile(
+    r"^(?P<year>\d{4})_M(?P<month>\d{2})_D(?P<day>\d{2})_"
+    r"(?P<hour>\d{2})(?P<minute>\d{2})\(UTC(?P<tz>[+-]\d{4})\)_"
+    r"L(?P<level>\d+)_"
+    r"(?P<parameter>[^_]+)_"
+    r"(?P<duration>[^_]+)_"
+    r"(?P<metric>[^.]+)\.csv$",
+    re.IGNORECASE,
+)
+
+fallback_parameter_pattern = re.compile(r"_L\d+_([^_]+)_", re.IGNORECASE)
+
+
+def normalized_name(value):
+    return value.strip().lower().replace(" ", "").replace("-", "_")
+
+
+def cleaned_cell(row, column_name):
+    value = row.get(column_name, "")
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def is_float(value):
+    try:
+        float(value)
+        return True
+    except Exception:
+        return False
+
+
+def parse_file_metadata(file_name):
+    match = filename_pattern.match(file_name)
+    if not match:
+        return None
+
+    year = match.group("year")
+    month = match.group("month")
+    day = match.group("day")
+    hour = match.group("hour")
+    minute = match.group("minute")
+    tz = match.group("tz")
+    parameter = match.group("parameter").upper()
+
+    return {
+        "parameter": parameter,
+        "timestamp_sort": f"{year}{month}{day}{hour}{minute}",
+        "timestamp": f"{year}-{month}-{day} {hour}:{minute} (UTC{tz})",
+        "daily": f"{year}{month}{day}",
+        "monthly": f"{year}{month}",
+        "annual": year,
+    }
+
+
+def resolve_parameter(csv_path, metadata):
+    if metadata and metadata.get("parameter"):
+        return metadata["parameter"]
+
+    fallback = fallback_parameter_pattern.search(csv_path.name)
+    if fallback:
+        return fallback.group(1).upper()
+
+    if csv_path.parent != source_root:
+        return csv_path.parent.name.upper()
+
+    return "UNKNOWN"
+
+
+def find_csv_header_index(lines):
+    for idx, raw_line in enumerate(lines):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        columns = [normalized_name(part) for part in stripped.split(",")]
+        if "x_km" in columns and "y_km" in columns:
+            return idx
+        if "x" in columns and "y" in columns:
+            return idx
+    return None
+
+
+def detect_xy_columns(fieldnames, sample_rows):
+    normalized_lookup = {normalized_name(col): col for col in fieldnames}
+
+    x_column = None
+    for candidate in ("x_km", "xkm", "x"):
+        if candidate in normalized_lookup:
+            col = normalized_lookup[candidate]
+            if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
+                x_column = col
+                break
+
+    y_column = None
+    for candidate in ("y_km", "ykm", "y"):
+        if candidate in normalized_lookup:
+            col = normalized_lookup[candidate]
+            if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
+                y_column = col
+                break
+
+    return x_column, y_column
+
+
+def detect_concentration_column(fieldnames, sample_rows, x_col, y_col):
+    receptor_like = {
+        normalized_name(x_col),
+        normalized_name(y_col),
+        "receptor",
+        "recettore",
+        "id",
+        "lat",
+        "lon",
+        "latitude",
+        "longitude",
+    }
+
+    candidates = []
+    for col in fieldnames:
+        lowered = normalized_name(col)
+        if lowered in receptor_like:
+            continue
+        if "conc" in lowered or "concentration" in lowered or lowered in ("value", "val"):
+            if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
+                candidates.append(col)
+
+    if candidates:
+        return candidates[0]
+
+    numeric_cols = []
+    for col in fieldnames:
+        lowered = normalized_name(col)
+        if lowered in receptor_like:
+            continue
+        if any(is_float(cleaned_cell(row, col)) for row in sample_rows if cleaned_cell(row, col)):
+            numeric_cols.append(col)
+
+    if numeric_cols:
+        return numeric_cols[-1]
+
+    return None
+
+
+def load_dataset(csv_path):
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        lines = handle.readlines()
+
+    header_index = find_csv_header_index(lines)
+    if header_index is None:
+        return None
+
+    csv_content = "".join(lines[header_index:])
+    reader = csv.DictReader(csv_content.splitlines())
+    fieldnames = reader.fieldnames or []
+
+    rows = [
+        row for row in reader
+        if any(cleaned_cell(row, col) for col in fieldnames)
+    ]
+
+    if not fieldnames or not rows:
+        return None
+
+    sample_rows = rows[: min(40, len(rows))]
+    x_col, y_col = detect_xy_columns(fieldnames, sample_rows)
+    if not x_col or not y_col:
+        return None
+
+    value_col = detect_concentration_column(fieldnames, sample_rows, x_col, y_col)
+    if not value_col:
+        return None
+
+    receptors = []
+    for row in rows:
+        raw_x = cleaned_cell(row, x_col)
+        raw_y = cleaned_cell(row, y_col)
+        raw_v = cleaned_cell(row, value_col)
+        if not raw_x or not raw_y or not raw_v:
+            continue
+        if not is_float(raw_x) or not is_float(raw_y) or not is_float(raw_v):
+            continue
+        receptors.append((float(raw_x), float(raw_y), float(raw_v)))
+
+    if not receptors:
+        return None
+
+    return {
+        "x_col": x_col,
+        "y_col": y_col,
+        "value_col": value_col,
+        "receptors": receptors,
+    }
+
+
+def nearest_value(receptors, target_x, target_y):
+    best = None
+    best_distance = None
+    for x_val, y_val, v_val in receptors:
+        dx = x_val - target_x
+        dy = y_val - target_y
+        dist = (dx * dx + dy * dy) ** 0.5
+        if best_distance is None or dist < best_distance:
+            best_distance = dist
+            best = (x_val, y_val, v_val, dist)
+    return best
+
+
+def collect_csv_files(root):
+    def has_csv_token(path):
+        return path.is_file() and ".csv" in path.name.lower()
+
+    # First, look for CSVs in the base folder
+    csvs = sorted([path for path in root.iterdir() if has_csv_token(path)], key=lambda p: p.name.lower())
+    if csvs:
+        return csvs
+    # If none found, look for CSVs in immediate subfolders (per parameter)
+    csvs = []
+    for sub in root.iterdir():
+        if sub.is_dir():
+            csvs.extend([path for path in sub.iterdir() if has_csv_token(path)])
+    return sorted(csvs, key=lambda p: p.name.lower())
+
+
+def safe_slug(text):
+    return re.sub(r"[^A-Za-z0-9_]+", "_", text.strip())
+
+
+def average(values):
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+csv_files = collect_csv_files(source_root)
+if not csv_files:
+    print("ERRORE: nessun file CSV trovato in " + str(source_root), file=sys.stderr)
+    # Try searching recursively (legacy fallback)
+    csv_files = sorted(
+        [path for path in source_root.rglob("*") if path.is_file() and ".csv" in path.name.lower()],
+        key=lambda p: p.name.lower(),
+    )
+    if not csv_files:
+        raise SystemExit(12)
+
+series = {}
+warnings = []
+skipped_files = []
+unknown_parameters = set()
+
+for csv_path in csv_files:
+    metadata = parse_file_metadata(csv_path.name)
+    if metadata is None:
+        skipped_files.append(csv_path.name)
+        continue
+
+    dataset = load_dataset(csv_path)
+    if dataset is None:
+        skipped_files.append(csv_path.name)
+        warnings.append(f"File ignorato (schema non valido): {csv_path.name}")
+        continue
+
+    parameter = resolve_parameter(csv_path, metadata)
+    if parameter == "UNKNOWN":
+        unknown_parameters.add(csv_path.name)
+
+    receptors = dataset["receptors"]
+    for point in points:
+        try:
+            point_id = str(point.get("point_id", "PXX"))
+            ix = int(point.get("ix"))
+            iy = int(point.get("iy"))
+            target_x = float(point.get("x_km"))
+            target_y = float(point.get("y_km"))
+        except Exception:
+            warnings.append("Punto non valido ignorato nella configurazione")
+            continue
+
+        nearest = nearest_value(receptors, target_x, target_y)
+        if nearest is None:
+            warnings.append(f"Nessun recettore valido per {point_id} in {csv_path.name}")
+            continue
+
+        rx, ry, value, distance = nearest
+        key = (point_id, ix, iy, parameter)
+        series.setdefault(key, []).append(
+            {
+                "timestamp_sort": metadata["timestamp_sort"],
+                "timestamp": metadata["timestamp"],
+                "daily": metadata["daily"],
+                "monthly": metadata["monthly"],
+                "annual": metadata["annual"],
+                "value": value,
+                "source_file": csv_path.name,
+                "target_x_km": target_x,
+                "target_y_km": target_y,
+                "receptor_x_km": rx,
+                "receptor_y_km": ry,
+                "distance_km": distance,
+            }
+        )
+
+if not series:
+    print("ERRORE: nessuna serie puntuale estratta", file=sys.stderr)
+    raise SystemExit(13)
+
+outputs_created = 0
+parameters_set = set()
+points_set = set()
+details = {}
+
+for (point_id, ix, iy, parameter), records in sorted(series.items(), key=lambda item: (item[0][0], item[0][3])):
+    parameters_set.add(parameter)
+    points_set.add((point_id, ix, iy))
+
+    records_sorted = sorted(records, key=lambda rec: rec["timestamp_sort"])
+    point_key = f"{point_id}_i{ix}_j{iy}_{parameter}"
+    details.setdefault(point_key, {"raw_records": 0, "outputs_created": 0, "grouped": {}})
+
+    file_base = f"timeseries_{safe_slug(point_id)}_i{ix}_j{iy}_{safe_slug(parameter)}"
+
+    if include_raw:
+        raw_dir = destination_root / "RAW" / parameter
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = raw_dir / f"{file_base}.csv"
+
+        with raw_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, lineterminator="\n")
+            writer.writerow([
+                "datetime",
+                "value",
+                "target_x_km",
+                "target_y_km",
+                "receptor_x_km",
+                "receptor_y_km",
+            ])
+            for rec in records_sorted:
+                writer.writerow([
+                    rec["timestamp"],
+                    f"{rec['value']:.6f}",
+                    f"{rec['target_x_km']:.6f}",
+                    f"{rec['target_y_km']:.6f}",
+                    f"{rec['receptor_x_km']:.6f}",
+                    f"{rec['receptor_y_km']:.6f}",
+                ])
+
+        outputs_created += 1
+        details[point_key]["outputs_created"] += 1
+        details[point_key]["raw_records"] = len(records_sorted)
+
+    for granularity in granularities:
+        periods = {}
+        for rec in records_sorted:
+            period = rec.get(granularity)
+            if not period:
+                continue
+            periods.setdefault(period, []).append(rec["value"])
+
+        if not periods:
+            continue
+
+        gran_dir = destination_root / granularity.upper() / parameter
+        gran_dir.mkdir(parents=True, exist_ok=True)
+        gran_path = gran_dir / f"{file_base}.csv"
+
+        with gran_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, lineterminator="\n")
+            writer.writerow(["period", "mean_value", "samples"])
+            for period_key in sorted(periods.keys()):
+                values = periods[period_key]
+                mean_value = average(values)
+                if mean_value is None:
+                    continue
+                writer.writerow([period_key, f"{mean_value:.6f}", len(values)])
+
+        outputs_created += 1
+        details[point_key]["outputs_created"] += 1
+        details[point_key]["grouped"][granularity] = len(periods)
+
+summary = {
+    "source_root": str(source_root),
+    "destination_root": str(destination_root),
+    "points_requested": len(points),
+    "points_processed": len(points_set),
+    "parameters_processed": len(parameters_set),
+    "outputs_created": outputs_created,
+    "requested_granularity": granularities,
+    "include_raw": bool(include_raw),
+    "warnings": warnings,
+    "skipped_files": sorted(set(skipped_files)),
+    "details": details,
+}
+
+summary_path = destination_root / "puntuale_summary.json"
+with summary_path.open("w", encoding="utf-8") as summary_handle:
+    json.dump(summary, summary_handle, indent=2, ensure_ascii=False)
+
+print(json.dumps(summary, ensure_ascii=False))
