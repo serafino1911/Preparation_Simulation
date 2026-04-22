@@ -1251,7 +1251,7 @@ class FarmOperationsWindow:
         """Prepara CALPOST copiando la cartella necessaria"""
         self._prepare_folder("CALPOST", "Prepare CALPOST")
     
-    def _prepare_folder(self, folder_name, operation_name):
+    def _prepare_folder(self, folder_name, operation_name, source_folder_name=None, dest_folder_name=None):
         """Metodo generico per preparare una cartella copiandola da Base_Procedure"""
         if not PARAMIKO_AVAILABLE:
             messagebox.showerror(
@@ -1286,16 +1286,19 @@ class FarmOperationsWindow:
         
         self.log_message("\n" + "="*50)
         self.log_message(f"Operazione: {operation_name}")
+
+        effective_source_folder = source_folder_name or folder_name
+        effective_dest_folder = dest_folder_name or folder_name
         
         # Esegui in un thread separato
         thread = threading.Thread(
             target=self._prepare_folder_thread,
-            args=(folder_name, operation_name)
+            args=(folder_name, operation_name, effective_source_folder, effective_dest_folder)
         )
         thread.daemon = True
         thread.start()
     
-    def _prepare_folder_thread(self, folder_name, operation_name):
+    def _prepare_folder_thread(self, folder_name, operation_name, source_folder_name, dest_folder_name):
         """Thread per preparare una cartella"""
         try:
             # Connessione al Jump Server
@@ -1339,10 +1342,10 @@ class FarmOperationsWindow:
             
             # Percorsi
             base_procedure_path = "/project/pmten/Base_Procedure"
-            source_path = f"{base_procedure_path}/{folder_name}"
-            dest_path = f"{working_folder}/{folder_name}"
+            source_path = f"{base_procedure_path}/{source_folder_name}"
+            dest_path = f"{working_folder}/{dest_folder_name}"
             
-            self.log_message(f"\nVerifica cartella: {folder_name}")
+            self.log_message(f"\nVerifica cartella: {dest_folder_name}")
             
             # Verifica se la cartella esiste già nella destinazione
             stdin, stdout, stderr = target_client.exec_command(f'test -d "{dest_path}" && echo "EXISTS" || echo "NOT_EXISTS"')
@@ -1351,7 +1354,7 @@ class FarmOperationsWindow:
             if exists:
                 self.log_message(f"  ⊙ Cartella già presente: {dest_path}")
                 self.log_message(f"\n✓ {operation_name}: Cartella già presente, nessuna azione necessaria")
-                messagebox.showinfo("Info", f"La cartella {folder_name} è già presente nel working folder.")
+                messagebox.showinfo("Info", f"La cartella {dest_folder_name} è già presente nel working folder.")
             else:
                 # Verifica che la cartella sorgente esista
                 stdin, stdout, stderr = target_client.exec_command(f'test -d "{source_path}" && echo "EXISTS" || echo "NOT_EXISTS"')
@@ -1382,7 +1385,7 @@ class FarmOperationsWindow:
                 
                 
                 self.log_message(f"\n✓ {operation_name} completato con successo!")
-                messagebox.showinfo("Successo", f"{operation_name} completato!\nCartella {folder_name} copiata con successo.")
+                messagebox.showinfo("Successo", f"{operation_name} completato!\nCartella {dest_folder_name} copiata con successo.")
             
             
             if folder_name == "CALMET":
@@ -1406,11 +1409,13 @@ class FarmOperationsWindow:
     # === METODI PLACEHOLDER PER NUOVI BOTTONI ===
     
     def prepare_meteo(self):
-        """Prepara i dati meteo - DA IMPLEMENTARE"""
-        self.log_message("\n" + "="*50)
-        self.log_message("Operazione: Prepare Meteo")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Prepare Meteo da implementare")
+        """Prepara i dati meteo copiando PRTMET_v4.34"""
+        self._prepare_folder(
+            "PRTMET_v4.34",
+            "Prepare Meteo",
+            source_folder_name="PRTMET_v4.34",
+            dest_folder_name="PRTMET_v4.34"
+        )
     
     def launch_geographic(self):
         """Lancia elaborazione dati geografici: TERREL → CTGPROC → MAKEGEO"""
