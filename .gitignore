@@ -34,6 +34,7 @@ Outputs/
 CALMET_INP*/
 CALPUFF_INP*/
 CALPOST_INP*/
+METEO_INP*/
 Prova*/
 *.tif
 *.xyz
@@ -53,5 +54,6 @@ Thumbs.db
 # Temporary files
 *.log
 *.tmp
+*.csv
 tmp*/
 temp*/

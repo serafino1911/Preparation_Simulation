@@ -1582,11 +1582,21 @@ class FarmOperationsWindow:
                 pass
     
     def launch_meteo(self):
-        """Lancia elaborazione dati meteo - DA IMPLEMENTARE"""
+        """Apre la finestra Meteo con Create INP, Load INP e Launch Meteo."""
+        try:
+            from windows.meteo_window import MeteoWindow
+        except Exception as import_error:
+            messagebox.showerror(
+                "Errore",
+                "Impossibile aprire la finestra Meteo.\n\n"
+                f"Dettagli: {import_error}"
+            )
+            return
+
         self.log_message("\n" + "="*50)
         self.log_message("Operazione: Launch Meteo")
-        self.log_message("⚠ Funzione da implementare")
-        messagebox.showinfo("Info", "Funzione Launch Meteo da implementare")
+        self.log_message("Apertura finestra configurazione Meteo...")
+        MeteoWindow(self.window, self.temp_dir, farm_controller=self)
     
     def launch_puntuale(self):
         """Configura ed estrae serie temporali puntuali dai CSV aggregati sul farm"""

@@ -1,0 +1,175 @@
+#!/bin/bash
+
+WORK_FOLDER="${TPL_WORK_FOLDER}"
+METEO_INP_DIR="${TPL_METEO_INP_DIR}"
+OUTPUT_DIR="${TPL_OUTPUT_DIR}"
+PRTMET_DIR="${TPL_PRTMET_DIR}"
+CALMET_DATA_DIR="${TPL_CALMET_DATA_DIR}"
+LINK_FILE="${TPL_LINK_FILE}"
+
+echo "=== Launch Meteo Batch ==="
+echo "WORK_FOLDER=${WORK_FOLDER}"
+echo "METEO_INP_DIR=${METEO_INP_DIR}"
+echo "OUTPUT_DIR=${OUTPUT_DIR}"
+echo "PRTMET_DIR=${PRTMET_DIR}"
+echo "CALMET_DATA_DIR=${CALMET_DATA_DIR}"
+echo "CACCA PUPU"
+
+# Carica ambiente Intel Fortran Compiler
+echo "Caricamento ambiente Intel Fortran..."
+if [ -f /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh ]; then
+    source /opt/intel/composer_xe_2013.5.192/bin/compilervars.sh intel64
+    echo "✓ Intel Fortran environment caricato"
+else
+    echo "⚠ Warning: compilervars.sh non trovato, provo con percorsi alternativi..."
+    # Fallback: setup manuale LD_LIBRARY_PATH
+    if [ -d "/opt/intel/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+    if [ -d "/opt/intel/compilers_and_libraries/linux/lib/intel64" ]; then
+        export LD_LIBRARY_PATH="/opt/intel/compilers_and_libraries/linux/lib/intel64:$LD_LIBRARY_PATH"
+    fi
+fi
+
+# Setup librerie NetCDF
+export LD_LIBRARY_PATH="/home/msantostefano/netcdffort:/home/msantostefano/netcdfc:$LD_LIBRARY_PATH"
+
+sanitize_name() {
+    printf '%s' "$1" | sed 's/[[:cntrl:]]//g; s/^[[:space:]]*//; s/[[:space:]]*$//'
+}
+
+move_generated_output() {
+    local expected_name
+    local expected_clean
+    local candidate
+    local candidate_base
+    local candidate_clean
+
+    expected_name=$(basename "$1")
+    expected_clean=$(sanitize_name "${expected_name}")
+
+    if [ -z "${expected_clean}" ]; then
+        return 0
+    fi
+
+    while IFS= read -r -d '' candidate; do
+        candidate_base=$(basename "${candidate}")
+        candidate_clean=$(sanitize_name "${candidate_base}")
+        if [ "${candidate_clean,,}" = "${expected_clean,,}" ]; then
+            mv -f "${candidate}" "${OUTPUT_DIR}/${expected_clean}"
+            return 0
+        fi
+    done < <(find "${PRTMET_DIR}" -maxdepth 1 -type f -print0)
+
+    return 1
+}
+
+mkdir -p "${OUTPUT_DIR}"
+
+if [ ! -d "${METEO_INP_DIR}" ]; then
+    echo "ERRORE: cartella METEO_INP non trovata: ${METEO_INP_DIR}"
+    exit 10
+fi
+
+if [ ! -d "${PRTMET_DIR}" ]; then
+    echo "ERRORE: cartella PRTMET non trovata: ${PRTMET_DIR}"
+    exit 11
+fi
+
+if [ ! -d "${CALMET_DATA_DIR}" ]; then
+    echo "ERRORE: cartella CALMET_DATA non trovata: ${CALMET_DATA_DIR}"
+    exit 12
+fi
+
+if [ -x "${PRTMET_DIR}/prtmet.exe" ]; then
+    PRTMET_EXE="${PRTMET_DIR}/prtmet.exe"
+else
+    mapfile -t PRTMET_EXE_CANDIDATES < <(find "${PRTMET_DIR}" -maxdepth 1 -type f -name "prtmet*" | sort)
+    if [ ${#PRTMET_EXE_CANDIDATES[@]} -eq 0 ]; then
+        echo "ERRORE: eseguibile PRTMET non trovato in ${PRTMET_DIR}"
+        exit 13
+    fi
+    PRTMET_EXE="${PRTMET_EXE_CANDIDATES[0]}"
+fi
+
+echo "Eseguibile PRTMET: ${PRTMET_EXE}"
+
+INP_DIR="${METEO_INP_DIR}/daily_inp"
+if [ ! -d "${INP_DIR}" ]; then
+    INP_DIR="${METEO_INP_DIR}/hourly_inp"
+fi
+if [ ! -d "${INP_DIR}" ]; then
+    echo "ERRORE: cartella daily_inp/hourly_inp non trovata in ${METEO_INP_DIR}"
+    exit 14
+fi
+
+shopt -s nullglob
+mapfile -t INP_FILES < <(find "${INP_DIR}" -maxdepth 1 -type f -name "*.inp" | sort)
+if [ ${#INP_FILES[@]} -eq 0 ]; then
+    echo "ERRORE: nessun file INP trovato in ${INP_DIR}"
+    exit 15
+fi
+
+echo "File INP trovati: ${#INP_FILES[@]}"
+SUCCESS_COUNT=0
+FAIL_COUNT=0
+
+for INP_FILE in "${INP_FILES[@]}"; do
+    INP_NAME=$(basename "${INP_FILE}")
+    INP_BASE="${INP_NAME%.inp}"
+
+    echo "--------------------------------------------------"
+    echo "Elaborazione: ${INP_NAME}"
+
+    CALMET_NAME=$(awk -F'=' '/METDAT/ {v=$2; gsub(/!/,"",v); gsub(/[[:space:]]/,"",v); gsub(/\r/,"",v); print v; exit}' "${INP_FILE}")
+    RUNLST_NAME=$(awk -F'=' '/RUNLST/ {v=$2; gsub(/!/,"",v); gsub(/[[:space:]]/,"",v); gsub(/\r/,"",v); print v; exit}' "${INP_FILE}")
+    OUTDAT_NAME=$(awk -F'=' '/PRTTIME/ {v=$2; gsub(/!/,"",v); gsub(/[[:space:]]/,"",v); gsub(/\r/,"",v); print v; exit}' "${INP_FILE}")
+
+    CALMET_BASENAME=$(basename "${CALMET_NAME}")
+
+    CALMET_SRC=$(find "${CALMET_DATA_DIR}" -type f -iname "${CALMET_BASENAME}" | head -n 1)
+    if [ -z "${CALMET_SRC}" ]; then
+        echo "ERRORE: file CALMET non trovato per ${INP_NAME} (${CALMET_BASENAME})"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        continue
+    fi
+
+    cp -f "${CALMET_SRC}" "${PRTMET_DIR}/"
+    cp -f "${INP_FILE}" "${PRTMET_DIR}/prtmet.inp"
+
+    cd "${PRTMET_DIR}"
+    "${PRTMET_EXE}" prtmet.inp > "${OUTPUT_DIR}/${INP_BASE}.log" 2> "${OUTPUT_DIR}/${INP_BASE}.err"
+    RUN_STATUS=$?
+
+    if [ ${RUN_STATUS} -ne 0 ]; then
+        echo "ERRORE: prtmet fallito per ${INP_NAME} (exit ${RUN_STATUS})"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    else
+        for RES_NAME in "${RUNLST_NAME}" "${OUTDAT_NAME}"; do
+            if [ -z "${RES_NAME}" ]; then
+                continue
+            fi
+            if ! move_generated_output "${RES_NAME}"; then
+                echo "WARNING: output non trovato o non rinominabile per ${INP_NAME} ($(sanitize_name "${RES_NAME}"))"
+            fi
+        done
+        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    fi
+
+    rm -f "${PRTMET_DIR}/prtmet.inp"
+    if [ -n "${CALMET_BASENAME}" ]; then
+        rm -f "${PRTMET_DIR}/${CALMET_BASENAME}" "${PRTMET_DIR}/${CALMET_BASENAME,,}" "${PRTMET_DIR}/${CALMET_BASENAME^^}"
+    fi
+done
+
+echo "Completato: successi=${SUCCESS_COUNT}, errori=${FAIL_COUNT}"
+if [ ${FAIL_COUNT} -gt 0 ]; then
+    exit 16
+fi
+
+if [ "${LINK_FILE}" = "1" ]; then
+    ln -sfn "${OUTPUT_DIR}" "${WORK_FOLDER}/meteo_output_link"
+fi
+
+echo "=== Launch Meteo Batch completato ==="
+exit 0

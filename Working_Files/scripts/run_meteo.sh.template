@@ -1,0 +1,114 @@
+#!/bin/bash
+
+WORK_FOLDER="${TPL_WORK_FOLDER}"
+METEO_INP_DIR="${TPL_METEO_INP_DIR}"
+OUTPUT_DIR="${TPL_OUTPUT_DIR}"
+INPUT_FOLDER="${TPL_INPUT_FOLDER}"
+PRTMET_DIR="${TPL_PRTMET_DIR}"
+CALMET_DATA_DIR="${TPL_CALMET_DATA_DIR}"
+LINK_FILE="${TPL_LINK_FILE}"
+
+echo "=== Launch Meteo ==="
+echo "WORK_FOLDER=${WORK_FOLDER}"
+echo "METEO_INP_DIR=${METEO_INP_DIR}"
+echo "OUTPUT_DIR=${OUTPUT_DIR}"
+echo "INPUT_FOLDER=${INPUT_FOLDER}"
+echo "PRTMET_DIR=${PRTMET_DIR}"
+echo "CALMET_DATA_DIR=${CALMET_DATA_DIR}"
+echo "LINK_FILE=${LINK_FILE}"
+echo " Cacca Pupu"
+
+mkdir -p "${OUTPUT_DIR}"
+
+if [ ! -d "${METEO_INP_DIR}" ]; then
+    echo "ERRORE: cartella METEO_INP non trovata: ${METEO_INP_DIR}"
+    exit 10
+fi
+
+if [ -d "${INPUT_FOLDER}" ]; then
+    DEG_COUNT=$(find "${INPUT_FOLDER}" -maxdepth 1 -type f -name "*.deg" | wc -l)
+    echo "File .deg trovati in INPUT_FOLDER: ${DEG_COUNT}"
+else
+    echo "WARNING: INPUT_FOLDER non trovata: ${INPUT_FOLDER}"
+fi
+
+if [ -d "${CALMET_DATA_DIR}" ]; then
+    DAT_COUNT=$(find "${CALMET_DATA_DIR}" -maxdepth 1 -type f -name "*.dat" | wc -l)
+    echo "File .dat trovati in CALMET_DATA_DIR: ${DAT_COUNT}"
+else
+    echo "WARNING: CALMET_DATA_DIR non trovata: ${CALMET_DATA_DIR}"
+fi
+
+if [ "${LINK_FILE}" = "1" ]; then
+    if [ -d "${INPUT_FOLDER}" ]; then
+        ln -sfn "${INPUT_FOLDER}" "${OUTPUT_DIR}/input_deg_link"
+        echo "Creato link simbolico input_deg_link -> ${INPUT_FOLDER}"
+    fi
+fi
+
+if [ -x "${PRTMET_DIR}/prtmet.exe" ]; then
+    INP_DIR="${METEO_INP_DIR}/daily_inp"
+    if [ ! -d "${INP_DIR}" ]; then
+        INP_DIR="${METEO_INP_DIR}/hourly_inp"
+    fi
+    if [ ! -d "${INP_DIR}" ]; then
+        echo "ERRORE: cartella daily_inp/hourly_inp non trovata in ${METEO_INP_DIR}"
+        exit 11
+    fi
+
+    shopt -s nullglob
+    INP_FILES=("${INP_DIR}"/*.inp)
+    if [ ${#INP_FILES[@]} -eq 0 ]; then
+        echo "ERRORE: nessun file INP trovato in ${INP_DIR}"
+        exit 12
+    fi
+
+    echo "File INP da processare: ${#INP_FILES[@]}"
+    SUCCESS_COUNT=0
+    FAIL_COUNT=0
+
+    for INP_FILE in "${INP_FILES[@]}"; do
+        INP_NAME=$(basename "${INP_FILE}")
+        INP_BASE="${INP_NAME%.inp}"
+        echo "--------------------------------------------------"
+        echo "Esecuzione ${INP_NAME}"
+
+        CALMET_NAME=$(awk -F'=' '/METDAT/ {gsub(/!/,"",$2); gsub(/ /,"",$2); print $2; exit}' "${INP_FILE}")
+        CALMET_SRC=$(find "${CALMET_DATA_DIR}" -maxdepth 1 -type f -iname "${CALMET_NAME}" | head -n 1)
+
+        if [ -z "${CALMET_SRC}" ]; then
+            echo "ERRORE: file CALMET non trovato per ${INP_NAME} (${CALMET_NAME})"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+            continue
+        fi
+
+        cp -f "${CALMET_SRC}" "${PRTMET_DIR}/"
+        cp -f "${INP_FILE}" "${PRTMET_DIR}/prtmet.inp"
+
+        cd "${PRTMET_DIR}"
+        ./prtmet.exe prtmet.inp > "${OUTPUT_DIR}/${INP_BASE}.log" 2> "${OUTPUT_DIR}/${INP_BASE}.err"
+        RUN_STATUS=$?
+
+        if [ ${RUN_STATUS} -ne 0 ]; then
+            echo "ERRORE: prtmet.exe fallito per ${INP_NAME} (exit ${RUN_STATUS})"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        else
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        fi
+
+        rm -f "${PRTMET_DIR}/prtmet.inp"
+        if [ -n "${CALMET_NAME}" ]; then
+            rm -f "${PRTMET_DIR}/${CALMET_NAME}" "${PRTMET_DIR}/${CALMET_NAME,,}"
+        fi
+    done
+
+    echo "Completato: successi=${SUCCESS_COUNT}, errori=${FAIL_COUNT}"
+    if [ ${FAIL_COUNT} -gt 0 ]; then
+        exit 13
+    fi
+    exit 0
+fi
+
+echo "WARNING: prtmet.exe non trovato o non eseguibile in ${PRTMET_DIR}"
+echo "Launch Meteo terminato senza eseguire il binario PRTMET."
+exit 0
