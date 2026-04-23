@@ -13,7 +13,6 @@ echo "METEO_INP_DIR=${METEO_INP_DIR}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
 echo "PRTMET_DIR=${PRTMET_DIR}"
 echo "CALMET_DATA_DIR=${CALMET_DATA_DIR}"
-echo "CACCA PUPU"
 
 # Carica ambiente Intel Fortran Compiler
 echo "Caricamento ambiente Intel Fortran..."
@@ -62,6 +61,24 @@ move_generated_output() {
     done < <(find "${PRTMET_DIR}" -maxdepth 1 -type f -print0)
 
     return 1
+}
+
+move_extension_outputs() {
+    local ext
+    local candidate
+    local candidate_base
+    local candidate_clean
+
+    for ext in wdr wsp; do
+        while IFS= read -r -d '' candidate; do
+            candidate_base=$(basename "${candidate}")
+            candidate_clean=$(sanitize_name "${candidate_base}")
+            if [ -z "${candidate_clean}" ]; then
+                continue
+            fi
+            mv -f "${candidate}" "${OUTPUT_DIR}/${candidate_clean}"
+        done < <(find "${PRTMET_DIR}" -maxdepth 1 -type f -iname "*.${ext}" -print0)
+    done
 }
 
 mkdir -p "${OUTPUT_DIR}"
@@ -153,6 +170,7 @@ for INP_FILE in "${INP_FILES[@]}"; do
                 echo "WARNING: output non trovato o non rinominabile per ${INP_NAME} ($(sanitize_name "${RES_NAME}"))"
             fi
         done
+        move_extension_outputs
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     fi
 

@@ -372,6 +372,7 @@ class MeteoWindow:
     def _collect_config(self):
         start_tuple = self._date_str_to_tuple(self.date_start.get())
         end_tuple = self._date_str_to_tuple(self.date_end.get())
+        effective_points = self.points if self.points else [self._get_full_field_point()]
 
         config = {
             "OUTPUT_FOLDER": self.output_folder.get().strip() or "METEODATA",
@@ -383,10 +384,24 @@ class MeteoWindow:
             "DATE_START": list(start_tuple),
             "DATE_END": list(end_tuple),
             "LINK_FILE": bool(self.link_file.get()),
-            "POINTS": self.points,
+            "POINTS": effective_points,
             "RUN_BACKGROUND": bool(self.run_background.get()),
         }
         return config
+
+    def _get_full_field_point(self):
+        point = self._build_point_entry(0, 0, 1)
+        if point:
+            return point
+        return {
+            "point_id": "P01",
+            "ix": 0,
+            "iy": 0,
+            "x_km": 0.0,
+            "y_km": 0.0,
+            "lat": None,
+            "lon": None,
+        }
 
     def save_config(self):
         try:
@@ -410,7 +425,7 @@ class MeteoWindow:
     def _refresh_points_view(self):
         self.points_list.delete(0, tk.END)
         if not self.points:
-            self.points_list.insert(tk.END, "Nessun punto selezionato")
+            self.points_list.insert(tk.END, "Nessun punto selezionato: uso 0,0 (tutto campo)")
             return
 
         for idx, point in enumerate(self.points, start=1):
@@ -750,6 +765,9 @@ class MeteoWindow:
             return False
 
     def _build_points_dict(self):
+        if not self.points:
+            return {"E1": [0, 0]}
+
         points_dict = {}
         for idx, point in enumerate(self.points, start=1):
             label = f"E{idx}"
@@ -812,9 +830,6 @@ class MeteoWindow:
             return None
 
         points_dict = self._build_points_dict()
-        if not points_dict:
-            messagebox.showerror("Errore", "Seleziona almeno un punto valido prima di creare INP.")
-            return None
 
         template_path = self._get_prtmet_template_path()
         if not template_path.exists():
