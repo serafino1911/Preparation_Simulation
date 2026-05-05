@@ -1,0 +1,161 @@
+from pathlib import Path
+import csv
+import json
+import re
+import sys
+from datetime import datetime
+
+source_root = Path(${TPL_SOURCE_ROOT_LITERAL})
+destination_root = Path(${TPL_DESTINATION_ROOT_LITERAL})
+
+if not source_root.is_dir():
+    print("ERRORE: cartella sorgente non trovata: " + str(source_root), file=sys.stderr)
+    raise SystemExit(10)
+
+destination_root.mkdir(parents=True, exist_ok=True)
+
+# Formato atteso: meteo_{YYYYMMDD}_{point}.dat
+FILE_PATTERN = re.compile(r'^meteo_(\d{8})_(.+)\.dat$', re.IGNORECASE)
+
+
+def parse_column_names(header_line):
+    raw_tokens = header_line.strip().split()
+    time_cols = {'YEAR', 'MONTH', 'DAY', 'HOUR'}
+    return [token for token in raw_tokens if token.upper() not in time_cols]
+
+
+def parse_dat_file(file_path):
+    lines = file_path.read_text(encoding='utf-8', errors='replace').splitlines()
+
+    header_idx = None
+    for idx, line in enumerate(lines):
+        if 'YEAR' in line and 'MONTH' in line and 'DAY' in line and 'HOUR' in line:
+            header_idx = idx
+            break
+
+    if header_idx is None:
+        return None, []
+
+    data_columns = parse_column_names(lines[header_idx])
+    rows = []
+
+    for line in lines[header_idx + 1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        tokens = stripped.split()
+        try:
+            year = int(tokens[0])
+            month = int(tokens[1])
+            day = int(tokens[2])
+            hour = int(tokens[3])
+        except (IndexError, ValueError):
+            continue
+
+        if not (1900 <= year <= 2200):
+            continue
+
+        try:
+            dt = datetime(year, month, day, hour)
+        except ValueError:
+            continue
+
+        row = {'datetime': dt}
+        for col_name, token in zip(data_columns, tokens[4:]):
+            try:
+                row[col_name] = float(token)
+            except ValueError:
+                row[col_name] = token
+
+        rows.append(row)
+
+    return data_columns, rows
+
+
+files_by_point = {}
+for dat_file in sorted(source_root.glob('*.dat')):
+    match = FILE_PATTERN.match(dat_file.name)
+    if not match:
+        continue
+
+    date_key = match.group(1)
+    point_id = match.group(2)
+    files_by_point.setdefault(point_id, []).append((date_key, dat_file))
+
+if not files_by_point:
+    print(
+        "ERRORE: nessun file meteo_YYYYMMDD_POINT.dat trovato in " + str(source_root),
+        file=sys.stderr,
+    )
+    raise SystemExit(11)
+
+outputs_created = 0
+warnings = []
+details = {}
+
+for point_id, point_files in sorted(files_by_point.items()):
+    point_files.sort(key=lambda item: item[0])
+
+    merged_rows = []
+    output_columns = None
+
+    for _date_key, dat_file in point_files:
+        columns, rows = parse_dat_file(dat_file)
+
+        if not rows:
+            warnings.append(f"Nessun dato in {dat_file.name}")
+            continue
+
+        if output_columns is None:
+            output_columns = columns
+
+        merged_rows.extend(rows)
+
+    if not merged_rows:
+        warnings.append(f"Nessuna riga valida per il punto {point_id}")
+        continue
+
+    # Mantiene solo la prima occorrenza per datetime e ordina cronologicamente.
+    seen_datetimes = set()
+    unique_rows = []
+    for row in merged_rows:
+        dt_key = row['datetime']
+        if dt_key in seen_datetimes:
+            continue
+        seen_datetimes.add(dt_key)
+        unique_rows.append(row)
+
+    unique_rows.sort(key=lambda row: row['datetime'])
+
+    output_path = destination_root / f"timeseries_meteo_{point_id}.csv"
+    fieldnames = ['datetime'] + (output_columns or [])
+
+    with output_path.open('w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+
+        for row in unique_rows:
+            csv_row = dict(row)
+            csv_row['datetime'] = row['datetime'].strftime('%Y-%m-%d %H:%M')
+            writer.writerow(csv_row)
+
+    outputs_created += 1
+    details[point_id] = {
+        'output_file': str(output_path),
+        'records': len(unique_rows),
+        'files_read': len(point_files),
+    }
+
+summary = {
+    "status": "ok",
+    "timeseries_type": "meteo_puntuale",
+    "source_root": str(source_root),
+    "destination_root": str(destination_root),
+    "points_processed": len(details),
+    "outputs_created": outputs_created,
+    "details": details,
+    "warnings": warnings,
+}
+
+print(json.dumps(summary, ensure_ascii=False))

@@ -1,0 +1,22 @@
+from pathlib import Path
+import json
+import sys
+
+source_root = Path(${TPL_SOURCE_ROOT_LITERAL})
+destination_root = Path(${TPL_DESTINATION_ROOT_LITERAL})
+
+if not source_root.is_dir():
+    print("ERRORE: cartella sorgente non trovata: " + str(source_root), file=sys.stderr)
+    raise SystemExit(10)
+
+destination_root.mkdir(parents=True, exist_ok=True)
+
+summary = {
+    "status": "placeholder",
+    "timeseries_type": "meteo",
+    "source_root": str(source_root),
+    "destination_root": str(destination_root),
+    "message": "Template TimeSeries Meteo caricato. Implementazione specifica da completare.",
+}
+
+print(json.dumps(summary, ensure_ascii=False))

@@ -125,7 +125,7 @@ class FarmOperationsWindow:
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(6, weight=1)
+        main_frame.rowconfigure(7, weight=1)
         
         # === TITOLO ===
         title_label = ttk.Label(
@@ -137,7 +137,7 @@ class FarmOperationsWindow:
         
         # === CREDENZIALI ===
         cred_frame = ttk.LabelFrame(main_frame, text="🔐 Credenziali SSH", padding="10")
-        cred_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        cred_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         cred_frame.columnconfigure(1, weight=1)
         
         # Password Jump Server
@@ -171,13 +171,13 @@ class FarmOperationsWindow:
         
         # === STATO CONNESSIONE ===
         status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        status_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         status_frame.columnconfigure(1, weight=1)
         
         
         # === PULSANTI OPERAZIONI ===
         operations_frame = ttk.LabelFrame(main_frame, text="📋 Operazioni Disponibili", padding="15")
-        operations_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 15))
+        operations_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 8))
         operations_frame.columnconfigure(0, weight=1)
         operations_frame.columnconfigure(1, weight=1)
         operations_frame.columnconfigure(2, weight=1)
@@ -317,10 +317,18 @@ class FarmOperationsWindow:
             command=self.launch_puntuale,
             width=button_width
         ).grid(row=5, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
+
+        # RIGA 6
+        ttk.Button(
+            operations_frame,
+            text="📈 TimeSeries",
+            command=self.launch_timeseries,
+            width=button_width
+        ).grid(row=6, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+
         # === AREA OUTPUT/LOG ===
         log_frame = ttk.LabelFrame(main_frame, text="📄 Output Operation Log", padding="10")
-        log_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
+        log_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 8))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         
@@ -335,7 +343,7 @@ class FarmOperationsWindow:
         
         # === PULSANTI AZIONE ===
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=7, column=0, sticky=(tk.W, tk.E))
+        button_frame.grid(row=8, column=0, sticky=(tk.W, tk.E))
         button_frame.columnconfigure(0, weight=1)
         button_frame.columnconfigure(1, weight=1)
         button_frame.columnconfigure(2, weight=1)
@@ -3418,6 +3426,465 @@ class FarmOperationsWindow:
             except Exception:
                 pass
     
+    def launch_timeseries(self):
+        """Apre il dialog per scegliere il tipo di TimeSeries."""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Tipo TimeSeries")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        dialog.transient(self.window)
+
+        selected_kind = {'value': None}
+
+        # Centra il dialog sulla finestra principale
+        self.window.update_idletasks()
+        x = self.window.winfo_x() + (self.window.winfo_width() // 2) - 200
+        y = self.window.winfo_y() + (self.window.winfo_height() // 2) - 70
+        dialog.geometry(f"400x140+{x}+{y}")
+
+        ttk.Label(
+            dialog,
+            text="Seleziona il tipo di TimeSeries:",
+            font=('Arial', 10)
+        ).pack(pady=(20, 15))
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack()
+
+        def on_meteo_puntuale():
+            selected_kind['value'] = 'meteo puntuale'
+            dialog.destroy()
+
+        def on_meteo_campo():
+            selected_kind['value'] = 'meteo campo'
+            dialog.destroy()
+
+        ttk.Button(btn_frame, text="☁️ Meteo Puntuale", command=on_meteo_puntuale, width=18).grid(
+            row=0, column=0, padx=10, pady=5
+        )
+        ttk.Button(btn_frame, text="🌫️ Meteo Campo", command=on_meteo_campo, width=18).grid(
+            row=0, column=1, padx=10, pady=5
+        )
+
+        dialog.wait_window()
+
+        if selected_kind['value'] == 'meteo puntuale':
+            self.launch_timeseries_meteo_puntuale()
+        elif selected_kind['value'] == 'meteo campo':
+            self.launch_timeseries_meteo_campo()
+
+    def _check_timeseries_prerequisites(self):
+        """Valida prerequisiti di connessione per TimeSeries."""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return False
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return False
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return False
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return False
+
+        return True
+
+    def _read_json_file_safe(self, file_path):
+        """Legge un JSON locale restituendo {} in caso di errore."""
+        try:
+            if file_path.exists():
+                with open(file_path, 'r', encoding='utf-8') as handle:
+                    return json.load(handle)
+        except Exception:
+            pass
+        return {}
+
+    def _resolve_default_meteo_output_folder(self):
+        """Restituisce la cartella output Meteo salvata (fallback METEODATA)."""
+        candidate_paths = [
+            self.temp_dir / "meteo_config.json",
+            self.temp_dir.parent / "temp_config" / "meteo_config.json",
+            Path("temp_config") / "meteo_config.json",
+        ]
+        for config_path in candidate_paths:
+            cfg = self._read_json_file_safe(config_path)
+            if not cfg:
+                continue
+            output_folder = str(cfg.get("OUTPUT_FOLDER", cfg.get("METEODATA", ""))).strip()
+            if output_folder:
+                return output_folder
+        return "METEODATA"
+
+    def _show_timeseries_config_dialog(self, title, source_label, destination_label, default_source, default_destination, default_background):
+        """Mostra dialog configurazione TimeSeries e restituisce i parametri selezionati."""
+        dialog = tk.Toplevel(self.window)
+        dialog.title(title)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+        dialog.transient(self.window)
+
+        dialog_result = {}
+
+        tk.Label(
+            dialog,
+            text=source_label,
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=0, column=0, columnspan=2, sticky='w', padx=12, pady=(12, 2))
+
+        source_var = tk.StringVar(value=default_source)
+        tk.Entry(dialog, textvariable=source_var, width=32).grid(
+            row=1, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
+        )
+
+        tk.Label(
+            dialog,
+            text=destination_label,
+            font=('TkDefaultFont', 10, 'bold')
+        ).grid(row=2, column=0, columnspan=2, sticky='w', padx=12, pady=(2, 2))
+
+        destination_var = tk.StringVar(value=default_destination)
+        tk.Entry(dialog, textvariable=destination_var, width=32).grid(
+            row=3, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
+        )
+
+        background_var = tk.BooleanVar(value=default_background)
+        tk.Checkbutton(
+            dialog,
+            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            variable=background_var
+        ).grid(row=4, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8))
+
+        def _on_ok():
+            source_folder = source_var.get().strip()
+            destination_folder = destination_var.get().strip()
+
+            if not source_folder:
+                messagebox.showerror("Errore", "La cartella sorgente non può essere vuota.", parent=dialog)
+                return
+            if not destination_folder:
+                messagebox.showerror("Errore", "La cartella destinazione non può essere vuota.", parent=dialog)
+                return
+
+            dialog_result['source_folder'] = source_folder
+            dialog_result['destination_folder'] = destination_folder
+            dialog_result['run_in_background'] = bool(background_var.get())
+            dialog.destroy()
+
+        def _on_cancel():
+            dialog.destroy()
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.grid(row=5, column=0, columnspan=2, pady=(8, 12))
+        tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
+        tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
+
+        self.window.wait_window(dialog)
+        return dialog_result
+
+    def launch_timeseries_meteo_puntuale(self):
+        """Configura ed esegue la TimeSeries Meteo Puntuale."""
+        if not self._check_timeseries_prerequisites():
+            return
+
+        post_process_path = self.temp_dir / "post_process.json"
+        post_process_cfg = self._read_json_file_safe(post_process_path)
+
+        default_source = str(
+            post_process_cfg.get('timeseries_meteo_puntuale_source_folder', self._resolve_default_meteo_output_folder())
+        ).strip() or self._resolve_default_meteo_output_folder()
+        default_destination = str(
+            post_process_cfg.get('timeseries_meteo_puntuale_output_folder', 'TS_METEO_PUNTUALE')
+        ).strip() or 'TS_METEO_PUNTUALE'
+        default_background = bool(post_process_cfg.get('timeseries_meteo_puntuale_background', False))
+
+        dialog_result = self._show_timeseries_config_dialog(
+            "TimeSeries Meteo Puntuale",
+            "Cartella sorgente TimeSeries Meteo Puntuale:",
+            "Cartella destinazione TimeSeries Meteo Puntuale:",
+            default_source,
+            default_destination,
+            default_background,
+        )
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: TimeSeries Meteo Puntuale")
+
+        if not dialog_result:
+            self.log_message("Operazione annullata dall'utente.")
+            return
+
+        source_folder = dialog_result['source_folder']
+        destination_folder = dialog_result['destination_folder']
+        run_in_background = bool(dialog_result.get('run_in_background', False))
+
+        try:
+            previous = post_process_cfg if isinstance(post_process_cfg, dict) else {}
+            previous['timeseries_meteo_puntuale_source_folder'] = source_folder
+            previous['timeseries_meteo_puntuale_output_folder'] = destination_folder
+            previous['timeseries_meteo_puntuale_background'] = run_in_background
+            with open(post_process_path, 'w', encoding='utf-8') as handle:
+                json.dump(previous, handle, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+        self.log_message(f"Sorgente: {source_folder}")
+        self.log_message(f"Destinazione: {destination_folder}")
+        self.log_message(
+            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            if run_in_background else
+            "Modalità esecuzione: foreground (monitorata dalla UI)"
+        )
+
+        if run_in_background:
+            messagebox.showwarning(
+                "Attenzione",
+                "La TimeSeries Meteo Puntuale verrà sottomessa in background con bsub -q pmten.\n"
+                "Il lavoro non sarà monitorato dalla UI."
+            )
+
+        thread = threading.Thread(
+            target=self._launch_timeseries_thread,
+            args=('meteo_puntuale', source_folder, destination_folder, run_in_background)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def launch_timeseries_meteo_campo(self):
+        """Configura ed esegue la TimeSeries Meteo Campo."""
+        if not self._check_timeseries_prerequisites():
+            return
+
+        post_process_path = self.temp_dir / "post_process.json"
+        post_process_cfg = self._read_json_file_safe(post_process_path)
+
+        default_source = str(
+            post_process_cfg.get('timeseries_meteo_campo_source_folder', self._resolve_default_meteo_output_folder())
+        ).strip() or self._resolve_default_meteo_output_folder()
+        default_destination = str(
+            post_process_cfg.get('timeseries_meteo_campo_output_folder', 'TS_METEO_CAMPO')
+        ).strip() or 'TS_METEO_CAMPO'
+        default_background = bool(post_process_cfg.get('timeseries_meteo_campo_background', False))
+
+        dialog_result = self._show_timeseries_config_dialog(
+            "TimeSeries Meteo Campo",
+            "Cartella sorgente TimeSeries Meteo Campo:",
+            "Cartella destinazione TimeSeries Meteo Campo:",
+            default_source,
+            default_destination,
+            default_background,
+        )
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: TimeSeries Meteo Campo")
+
+        if not dialog_result:
+            self.log_message("Operazione annullata dall'utente.")
+            return
+
+        source_folder = dialog_result['source_folder']
+        destination_folder = dialog_result['destination_folder']
+        run_in_background = bool(dialog_result.get('run_in_background', False))
+
+        try:
+            previous = post_process_cfg if isinstance(post_process_cfg, dict) else {}
+            previous['timeseries_meteo_campo_source_folder'] = source_folder
+            previous['timeseries_meteo_campo_output_folder'] = destination_folder
+            previous['timeseries_meteo_campo_background'] = run_in_background
+            with open(post_process_path, 'w', encoding='utf-8') as handle:
+                json.dump(previous, handle, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+        self.log_message(f"Sorgente: {source_folder}")
+        self.log_message(f"Destinazione: {destination_folder}")
+        self.log_message(
+            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            if run_in_background else
+            "Modalità esecuzione: foreground (monitorata dalla UI)"
+        )
+
+        if run_in_background:
+            messagebox.showwarning(
+                "Attenzione",
+                "La TimeSeries Meteo Campo verrà sottomessa in background con bsub -q pmten.\n"
+                "Il lavoro non sarà monitorato dalla UI."
+            )
+
+        thread = threading.Thread(
+            target=self._launch_timeseries_thread,
+            args=('meteo_campo', source_folder, destination_folder, run_in_background)
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _launch_timeseries_thread(self, timeseries_kind, source_folder, destination_folder, run_in_background=False):
+        """Thread per preparare/eseguire TimeSeries Meteo/Inquinanti via script template."""
+        jump_client = None
+        target_client = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            source_root = source_folder if source_folder.startswith('/') else f"{work_folder}/{source_folder}"
+            destination_root = destination_folder if destination_folder.startswith('/') else f"{work_folder}/{destination_folder}"
+
+            self.log_message("Verifica cartella sorgente per TimeSeries...")
+            stdin, stdout, stderr = target_client.exec_command(
+                f'test -d "{source_root}" && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                raise RuntimeError(f"Cartella sorgente non trovata: {source_root}")
+
+            source_root_literal = json.dumps(source_root)
+            destination_root_literal = json.dumps(destination_root)
+
+            template_by_kind = {
+                'meteo_puntuale': "python/calc_timeseries_meteo_puntuale.py.template",
+                'meteo_campo': "python/calc_timeseries_meteo_campo.py.template",
+            }
+            template_name = template_by_kind.get(timeseries_kind)
+            if not template_name:
+                raise RuntimeError(f"Tipo TimeSeries non supportato: {timeseries_kind}")
+
+            remote_script = self._render_script_template(
+                template_name,
+                {
+                    "TPL_SOURCE_ROOT_LITERAL": source_root_literal,
+                    "TPL_DESTINATION_ROOT_LITERAL": destination_root_literal,
+                },
+            )
+
+            target_client.exec_command(f'mkdir -p "{destination_root}"')
+
+            if run_in_background:
+                script_path = f"{work_folder}/run_timeseries_{timeseries_kind}_background.sh"
+                bsub_out = f"{destination_root}/timeseries_{timeseries_kind}_output.log"
+                bsub_err = f"{destination_root}/timeseries_{timeseries_kind}_error.log"
+                wrapper_script = "#!/bin/bash\nset -e\npython3 - <<'PY'\n" + remote_script + "\nPY\n"
+
+                self.log_message(f"Creazione script remoto TimeSeries {timeseries_kind} (background)...")
+                sftp = target_client.open_sftp()
+                with sftp.open(script_path, 'w') as script_file:
+                    script_file.write(wrapper_script)
+                sftp.close()
+
+                target_client.exec_command(f'chmod +x "{script_path}"')
+                target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
+
+                bsub_command = (
+                    f'cd "{work_folder}"; '
+                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                )
+                stdin, stdout, stderr = target_client.exec_command(bsub_command)
+                output = stdout.read().decode().strip()
+                error = stderr.read().decode().strip()
+                exit_status = stdout.channel.recv_exit_status()
+
+                if output:
+                    self.log_message(f"Output bsub TimeSeries {timeseries_kind}:\n{output}")
+                if error:
+                    self.log_message(f"Stderr bsub TimeSeries {timeseries_kind}:\n{error}")
+
+                if exit_status != 0:
+                    raise RuntimeError(error or f"Sottomissione TimeSeries fallita con exit code {exit_status}")
+
+                self.log_message(f"\n✓ Job TimeSeries {timeseries_kind} sottomesso in background!")
+                self.log_message(f"Log output: {bsub_out}")
+                self.log_message(f"Log errori: {bsub_err}")
+                messagebox.showwarning(
+                    "Job TimeSeries Sottomesso",
+                    f"Job TimeSeries {timeseries_kind} sottomesso con bsub -q pmten.\n\n"
+                    "Il lavoro non è monitorato dalla UI.\n"
+                    f"Controlla i log:\n{bsub_out}\n{bsub_err}"
+                )
+                return
+
+            remote_command = "python3 - <<'PY'\n" + remote_script + "\nPY"
+            self.log_message(f"Caricamento script TimeSeries {timeseries_kind} ed esecuzione...")
+            stdin, stdout, stderr = target_client.exec_command(remote_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output TimeSeries {timeseries_kind}:\n{output}")
+            if error:
+                self.log_message(f"Stderr TimeSeries {timeseries_kind}:\n{error}")
+
+            if exit_status != 0:
+                raise RuntimeError(error or f"TimeSeries {timeseries_kind} fallita con exit code {exit_status}")
+
+            self.log_message(f"\n✓ TimeSeries {timeseries_kind} completata con successo!")
+            self.log_message(f"Sorgente: {source_root}")
+            self.log_message(f"Destinazione: {destination_root}")
+            messagebox.showinfo(
+                "Successo",
+                f"TimeSeries {timeseries_kind} completata!\n\n"
+                "Lo script Python è stato caricato ed eseguito sul server."
+            )
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante TimeSeries {timeseries_kind}:\n\n{str(e)}")
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
+
     def launch_percentile(self):
         """Calcola percentili giornalieri/mensili/annuali dai CSV aggregati"""
         if not PARAMIKO_AVAILABLE:
