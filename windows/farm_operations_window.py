@@ -3527,7 +3527,17 @@ class FarmOperationsWindow:
                 return output_folder
         return "METEODATA"
 
-    def _show_timeseries_config_dialog(self, title, source_label, destination_label, default_source, default_destination, default_background):
+    def _show_timeseries_config_dialog(
+        self,
+        title,
+        source_label,
+        destination_label,
+        default_source,
+        default_destination,
+        default_background,
+        format_options=None,
+        coordinate_options=None,
+    ):
         """Mostra dialog configurazione TimeSeries e restituisce i parametri selezionati."""
         dialog = tk.Toplevel(self.window)
         dialog.title(title)
@@ -3559,12 +3569,53 @@ class FarmOperationsWindow:
             row=3, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
         )
 
+        current_row = 4
+
+        format_vars = {}
+        if format_options:
+            tk.Label(
+                dialog,
+                text="Formati output:",
+                font=('TkDefaultFont', 10, 'bold')
+            ).grid(row=current_row, column=0, columnspan=2, sticky='w', padx=12, pady=(2, 2))
+            current_row += 1
+
+            for key, label, enabled in format_options:
+                var = tk.BooleanVar(value=bool(enabled))
+                format_vars[key] = var
+                tk.Checkbutton(
+                    dialog,
+                    text=label,
+                    variable=var
+                ).grid(row=current_row, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 2))
+                current_row += 1
+
+        coordinate_vars = {}
+        if coordinate_options:
+            tk.Label(
+                dialog,
+                text="Coordinate da includere:",
+                font=('TkDefaultFont', 10, 'bold')
+            ).grid(row=current_row, column=0, columnspan=2, sticky='w', padx=12, pady=(6, 2))
+            current_row += 1
+
+            for key, label, enabled in coordinate_options:
+                var = tk.BooleanVar(value=bool(enabled))
+                coordinate_vars[key] = var
+                tk.Checkbutton(
+                    dialog,
+                    text=label,
+                    variable=var
+                ).grid(row=current_row, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 2))
+                current_row += 1
+
         background_var = tk.BooleanVar(value=default_background)
         tk.Checkbutton(
             dialog,
             text="Esegui in background con bsub -q pmten (job non monitorato)",
             variable=background_var
-        ).grid(row=4, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8))
+        ).grid(row=current_row, column=0, columnspan=2, sticky='w', padx=24, pady=(8, 8))
+        current_row += 1
 
         def _on_ok():
             source_folder = source_var.get().strip()
@@ -3577,16 +3628,31 @@ class FarmOperationsWindow:
                 messagebox.showerror("Errore", "La cartella destinazione non può essere vuota.", parent=dialog)
                 return
 
+            selected_formats = [key for key, var in format_vars.items() if var.get()]
+            selected_coordinates = [key for key, var in coordinate_vars.items() if var.get()]
+
+            if format_vars and not selected_formats:
+                messagebox.showerror("Errore", "Seleziona almeno un formato output.", parent=dialog)
+                return
+
+            if coordinate_vars and not selected_coordinates:
+                messagebox.showerror("Errore", "Seleziona almeno una modalità coordinate.", parent=dialog)
+                return
+
             dialog_result['source_folder'] = source_folder
             dialog_result['destination_folder'] = destination_folder
             dialog_result['run_in_background'] = bool(background_var.get())
+            if format_vars:
+                dialog_result['output_formats'] = selected_formats
+            if coordinate_vars:
+                dialog_result['output_coordinates'] = selected_coordinates
             dialog.destroy()
 
         def _on_cancel():
             dialog.destroy()
 
         btn_frame = tk.Frame(dialog)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=(8, 12))
+        btn_frame.grid(row=current_row, column=0, columnspan=2, pady=(8, 12))
         tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
         tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
 
@@ -3676,6 +3742,22 @@ class FarmOperationsWindow:
             post_process_cfg.get('timeseries_meteo_campo_output_folder', 'TS_METEO_CAMPO')
         ).strip() or 'TS_METEO_CAMPO'
         default_background = bool(post_process_cfg.get('timeseries_meteo_campo_background', False))
+        default_formats = post_process_cfg.get(
+            'timeseries_meteo_campo_output_formats',
+            ['netcdf', 'csv_long', 'csv_wide']
+        )
+        if not isinstance(default_formats, list):
+            default_formats = ['netcdf', 'csv_long', 'csv_wide']
+
+        default_coordinates = post_process_cfg.get(
+            'timeseries_meteo_campo_output_coordinates',
+            ['utm_km', 'lat_lon']
+        )
+        if not isinstance(default_coordinates, list):
+            default_coordinates = ['utm_km', 'lat_lon']
+
+        domain_cfg = self._read_json_file_safe(self.temp_dir / "domain_config.json")
+        utm_zone = str(domain_cfg.get('zona_utm', '')).strip() if isinstance(domain_cfg, dict) else ''
 
         dialog_result = self._show_timeseries_config_dialog(
             "TimeSeries Meteo Campo",
@@ -3684,6 +3766,15 @@ class FarmOperationsWindow:
             default_source,
             default_destination,
             default_background,
+            format_options=[
+                ('netcdf', 'NetCDF (.nc)', 'netcdf' in default_formats),
+                ('csv_long', 'CSV long (time, level, x/y, variabile, valore)', 'csv_long' in default_formats),
+                ('csv_wide', 'CSV wide per variabile', 'csv_wide' in default_formats),
+            ],
+            coordinate_options=[
+                ('utm_km', 'Coordinate UTM x_km / y_km', 'utm_km' in default_coordinates),
+                ('lat_lon', 'Coordinate lat / lon', 'lat_lon' in default_coordinates),
+            ],
         )
 
         self.log_message("\n" + "=" * 50)
@@ -3696,12 +3787,16 @@ class FarmOperationsWindow:
         source_folder = dialog_result['source_folder']
         destination_folder = dialog_result['destination_folder']
         run_in_background = bool(dialog_result.get('run_in_background', False))
+        output_formats = list(dialog_result.get('output_formats', ['netcdf', 'csv_long', 'csv_wide']))
+        output_coordinates = list(dialog_result.get('output_coordinates', ['utm_km', 'lat_lon']))
 
         try:
             previous = post_process_cfg if isinstance(post_process_cfg, dict) else {}
             previous['timeseries_meteo_campo_source_folder'] = source_folder
             previous['timeseries_meteo_campo_output_folder'] = destination_folder
             previous['timeseries_meteo_campo_background'] = run_in_background
+            previous['timeseries_meteo_campo_output_formats'] = output_formats
+            previous['timeseries_meteo_campo_output_coordinates'] = output_coordinates
             with open(post_process_path, 'w', encoding='utf-8') as handle:
                 json.dump(previous, handle, indent=2, ensure_ascii=False)
         except Exception:
@@ -3709,6 +3804,8 @@ class FarmOperationsWindow:
 
         self.log_message(f"Sorgente: {source_folder}")
         self.log_message(f"Destinazione: {destination_folder}")
+        self.log_message(f"Formati output: {', '.join(output_formats)}")
+        self.log_message(f"Coordinate output: {', '.join(output_coordinates)}")
         self.log_message(
             "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
             if run_in_background else
@@ -3724,12 +3821,30 @@ class FarmOperationsWindow:
 
         thread = threading.Thread(
             target=self._launch_timeseries_thread,
-            args=('meteo_campo', source_folder, destination_folder, run_in_background)
+            args=(
+                'meteo_campo',
+                source_folder,
+                destination_folder,
+                run_in_background,
+                {
+                    'output_formats': output_formats,
+                    'output_coordinates': output_coordinates,
+                    'ignored_extensions': ['.dat', '.csv', '.err', '.log'],
+                    'utm_zone': utm_zone,
+                },
+            )
         )
         thread.daemon = True
         thread.start()
 
-    def _launch_timeseries_thread(self, timeseries_kind, source_folder, destination_folder, run_in_background=False):
+    def _launch_timeseries_thread(
+        self,
+        timeseries_kind,
+        source_folder,
+        destination_folder,
+        run_in_background=False,
+        processing_options=None,
+    ):
         """Thread per preparare/eseguire TimeSeries Meteo/Inquinanti via script template."""
         jump_client = None
         target_client = None
@@ -3784,6 +3899,21 @@ class FarmOperationsWindow:
 
             source_root_literal = json.dumps(source_root)
             destination_root_literal = json.dumps(destination_root)
+            processing_options = processing_options if isinstance(processing_options, dict) else {}
+
+            selected_formats = processing_options.get('output_formats', ['netcdf', 'csv_long', 'csv_wide'])
+            if not isinstance(selected_formats, list):
+                selected_formats = ['netcdf', 'csv_long', 'csv_wide']
+
+            selected_coordinates = processing_options.get('output_coordinates', ['utm_km', 'lat_lon'])
+            if not isinstance(selected_coordinates, list):
+                selected_coordinates = ['utm_km', 'lat_lon']
+
+            ignored_extensions = processing_options.get('ignored_extensions', ['.dat', '.csv', '.err', '.log'])
+            if not isinstance(ignored_extensions, list):
+                ignored_extensions = ['.dat', '.csv', '.err', '.log']
+
+            utm_zone = str(processing_options.get('utm_zone', '')).strip()
 
             template_by_kind = {
                 'meteo_puntuale': "python/calc_timeseries_meteo_puntuale.py.template",
@@ -3798,6 +3928,10 @@ class FarmOperationsWindow:
                 {
                     "TPL_SOURCE_ROOT_LITERAL": source_root_literal,
                     "TPL_DESTINATION_ROOT_LITERAL": destination_root_literal,
+                    "TPL_SELECTED_FORMATS_LITERAL": json.dumps(selected_formats),
+                    "TPL_SELECTED_COORDINATES_LITERAL": json.dumps(selected_coordinates),
+                    "TPL_IGNORED_EXTENSIONS_LITERAL": json.dumps(ignored_extensions),
+                    "TPL_UTM_ZONE_LITERAL": json.dumps(utm_zone),
                 },
             )
 

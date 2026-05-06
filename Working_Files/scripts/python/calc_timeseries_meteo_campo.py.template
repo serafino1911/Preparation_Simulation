@@ -1,9 +1,18 @@
 from pathlib import Path
+import csv
 import json
+import re
 import sys
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
 
 source_root = Path(${TPL_SOURCE_ROOT_LITERAL})
 destination_root = Path(${TPL_DESTINATION_ROOT_LITERAL})
+selected_formats = ${TPL_SELECTED_FORMATS_LITERAL}
+selected_coordinates = ${TPL_SELECTED_COORDINATES_LITERAL}
+ignored_extensions = ${TPL_IGNORED_EXTENSIONS_LITERAL}
+utm_zone = str(${TPL_UTM_ZONE_LITERAL}).strip()
 
 if not source_root.is_dir():
     print("ERRORE: cartella sorgente non trovata: " + str(source_root), file=sys.stderr)
@@ -11,12 +20,453 @@ if not source_root.is_dir():
 
 destination_root.mkdir(parents=True, exist_ok=True)
 
+if not isinstance(selected_formats, list) or not selected_formats:
+    selected_formats = ["netcdf", "csv_long", "csv_wide"]
+if not isinstance(selected_coordinates, list) or not selected_coordinates:
+    selected_coordinates = ["utm_km", "lat_lon"]
+if not isinstance(ignored_extensions, list):
+    ignored_extensions = [".dat", ".csv", ".err", ".log"]
+
+selected_formats = {str(item).strip().lower() for item in selected_formats if str(item).strip()}
+selected_coordinates = {str(item).strip().lower() for item in selected_coordinates if str(item).strip()}
+ignored_extensions = {str(item).strip().lower() for item in ignored_extensions if str(item).strip()}
+
+allowed_formats = {"netcdf", "csv_long", "csv_wide"}
+allowed_coordinates = {"utm_km", "lat_lon"}
+
+selected_formats &= allowed_formats
+selected_coordinates &= allowed_coordinates
+
+if not selected_formats:
+    print("ERRORE: nessun formato output valido selezionato", file=sys.stderr)
+    raise SystemExit(12)
+
+if not selected_coordinates:
+    print("ERRORE: nessuna modalità coordinate valida selezionata", file=sys.stderr)
+    raise SystemExit(13)
+
+FILE_PATTERN = re.compile(
+    r"^(?P<year>\d{4})_M(?P<month>\d{1,2})_D(?P<day>\d{1,2})_"
+    r"(?P<hhmm>\d{4})\(UTC(?P<utc_offset>[+-]\d{4})\)_L(?P<level>\d+)\."
+    r"(?P<extension>[A-Za-z0-9_]+)$",
+    re.IGNORECASE,
+)
+
+VARIABLE_NAMES = {
+    "wdr": "wind_direction",
+    "wsp": "wind_speed",
+}
+
+VARIABLE_UNITS = {
+    "wdr": "deg",
+    "wsp": "m s-1",
+}
+
+
+def parse_utc_offset(raw_value):
+    sign = 1 if raw_value.startswith("+") else -1
+    hours = int(raw_value[1:3])
+    minutes = int(raw_value[3:5])
+    return timedelta(hours=sign * hours, minutes=sign * minutes)
+
+
+def parse_timestamp(match_obj):
+    year = int(match_obj.group("year"))
+    month = int(match_obj.group("month"))
+    day = int(match_obj.group("day"))
+    hhmm = match_obj.group("hhmm")
+    hour = int(hhmm[:2])
+    minute = int(hhmm[2:4])
+    offset_delta = parse_utc_offset(match_obj.group("utc_offset"))
+
+    local_dt = datetime(year, month, day, hour, minute)
+    local_tz = timezone(offset_delta)
+    aware_local = local_dt.replace(tzinfo=local_tz)
+    return aware_local.astimezone(timezone.utc)
+
+
+def normalize_variable_name(extension):
+    ext = extension.strip().lower()
+    if ext in VARIABLE_NAMES:
+        return VARIABLE_NAMES[ext]
+    return re.sub(r"[^a-z0-9_]+", "_", ext).strip("_") or "unknown"
+
+
+def read_dsaa_grid(file_path):
+    lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    meaningful_lines = [line.strip() for line in lines if line.strip()]
+
+    if len(meaningful_lines) < 6:
+        raise ValueError(f"Header DSAA incompleto in {file_path.name}")
+
+    if meaningful_lines[0].upper() != "DSAA":
+        raise ValueError(f"Magic DSAA non trovato in {file_path.name}")
+
+    nx_str, ny_str = meaningful_lines[1].split()
+    nx = int(nx_str)
+    ny = int(ny_str)
+
+    x_min, x_max = [float(value) for value in meaningful_lines[2].split()[:2]]
+    y_min, y_max = [float(value) for value in meaningful_lines[3].split()[:2]]
+
+    data_tokens = []
+    for line in meaningful_lines[5:]:
+        data_tokens.extend(line.split())
+
+    if len(data_tokens) != nx * ny:
+        raise ValueError(
+            f"Numero valori non coerente in {file_path.name}: "
+            f"atteso {nx * ny}, trovato {len(data_tokens)}"
+        )
+
+    data = np.asarray(data_tokens, dtype=np.float32).reshape((ny, nx))
+    return {
+        "nx": nx,
+        "ny": ny,
+        "x_min": x_min,
+        "x_max": x_max,
+        "y_min": y_min,
+        "y_max": y_max,
+        "values": data,
+    }
+
+
+def parse_utm_zone(value):
+    match = re.match(r"^(\d{1,2})([NS])$", value.upper())
+    if not match:
+        return None, None
+    return int(match.group(1)), match.group(2)
+
+
+warnings = []
+files_scanned = 0
+files_ignored_by_extension = 0
+files_ignored_by_pattern = 0
+
+records = []
+domain_header = None
+
+for candidate in sorted(source_root.iterdir()):
+    if not candidate.is_file():
+        continue
+
+    files_scanned += 1
+    suffix = candidate.suffix.lower()
+    if suffix in ignored_extensions:
+        files_ignored_by_extension += 1
+        continue
+
+    match = FILE_PATTERN.match(candidate.name)
+    if not match:
+        files_ignored_by_pattern += 1
+        continue
+
+    variable_extension = match.group("extension").lower()
+    variable_name = normalize_variable_name(variable_extension)
+    level = int(match.group("level"))
+    utc_timestamp = parse_timestamp(match)
+
+    grid_payload = read_dsaa_grid(candidate)
+    header_tuple = (
+        grid_payload["nx"],
+        grid_payload["ny"],
+        round(grid_payload["x_min"], 6),
+        round(grid_payload["x_max"], 6),
+        round(grid_payload["y_min"], 6),
+        round(grid_payload["y_max"], 6),
+    )
+
+    if domain_header is None:
+        domain_header = header_tuple
+    elif header_tuple != domain_header:
+        raise ValueError(
+            "Header DSAA incoerente tra file campo. "
+            f"Primo header={domain_header}, trovato in {candidate.name}={header_tuple}"
+        )
+
+    records.append(
+        {
+            "time": utc_timestamp,
+            "level": level,
+            "variable": variable_name,
+            "variable_extension": variable_extension,
+            "grid": grid_payload["values"],
+            "file_name": candidate.name,
+        }
+    )
+
+if not records:
+    print(
+        "ERRORE: nessun file meteo campo valido trovato in " + str(source_root),
+        file=sys.stderr,
+    )
+    raise SystemExit(11)
+
+time_values = sorted({record["time"] for record in records})
+level_values = sorted({record["level"] for record in records})
+variable_values = sorted({record["variable"] for record in records})
+
+time_index = {value: idx for idx, value in enumerate(time_values)}
+level_index = {value: idx for idx, value in enumerate(level_values)}
+
+nx = domain_header[0]
+ny = domain_header[1]
+x_min = domain_header[2]
+x_max = domain_header[3]
+y_min = domain_header[4]
+y_max = domain_header[5]
+
+x_km = np.linspace(x_min, x_max, nx, dtype=np.float64)
+y_km = np.linspace(y_min, y_max, ny, dtype=np.float64)
+
+data_by_variable = {
+    variable: np.full((len(time_values), len(level_values), ny, nx), np.nan, dtype=np.float32)
+    for variable in variable_values
+}
+
+seen_key = set()
+for record in sorted(records, key=lambda item: (item["time"], item["level"], item["variable"])):
+    key = (record["time"], record["level"], record["variable"])
+    if key in seen_key:
+        warnings.append(
+            "Duplicato ignorato per "
+            f"time={record['time'].isoformat()} level={record['level']} var={record['variable']} "
+            f"(file {record['file_name']})"
+        )
+        continue
+    seen_key.add(key)
+
+    tidx = time_index[record["time"]]
+    lidx = level_index[record["level"]]
+    data_by_variable[record["variable"]][tidx, lidx, :, :] = record["grid"]
+
+lat_grid = None
+lon_grid = None
+
+if "lat_lon" in selected_coordinates:
+    try:
+        from pyproj import CRS, Transformer
+    except ImportError as exc:
+        raise RuntimeError(
+            "Coordinate lat/lon richieste ma modulo pyproj non disponibile"
+        ) from exc
+
+    zone_number, hemisphere = parse_utm_zone(utm_zone)
+    if zone_number is None:
+        raise RuntimeError(
+            "Coordinate lat/lon richieste ma zona UTM non valida o assente. "
+            "Formato atteso, esempio: 32N"
+        )
+
+    x_mesh_km, y_mesh_km = np.meshgrid(x_km, y_km)
+    x_mesh_m = x_mesh_km * 1000.0
+    y_mesh_m = y_mesh_km * 1000.0
+
+    crs_wgs84 = CRS.from_epsg(4326)
+    crs_utm = CRS.from_dict(
+        {
+            "proj": "utm",
+            "zone": zone_number,
+            "datum": "WGS84",
+            "south": hemisphere == "S",
+        }
+    )
+    transformer = Transformer.from_crs(crs_utm, crs_wgs84, always_xy=True)
+    lon_grid, lat_grid = transformer.transform(x_mesh_m, y_mesh_m)
+
+outputs_created = []
+
+if "netcdf" in selected_formats:
+    try:
+        import xarray as xr
+    except ImportError:
+        warnings.append("Export NetCDF saltato: modulo xarray non disponibile")
+    else:
+        coords = {
+            "time": [dt.strftime("%Y-%m-%dT%H:%M:%SZ") for dt in time_values],
+            "level": level_values,
+            "y": np.arange(ny),
+            "x": np.arange(nx),
+        }
+
+        if "utm_km" in selected_coordinates:
+            coords["x_km"] = ("x", x_km)
+            coords["y_km"] = ("y", y_km)
+
+        if "lat_lon" in selected_coordinates and lat_grid is not None and lon_grid is not None:
+            coords["lat"] = (("y", "x"), lat_grid)
+            coords["lon"] = (("y", "x"), lon_grid)
+
+        data_vars = {}
+        for variable in variable_values:
+            data_vars[variable] = (("time", "level", "y", "x"), data_by_variable[variable])
+
+        dataset = xr.Dataset(
+            data_vars=data_vars,
+            coords=coords,
+            attrs={
+                "timeseries_type": "meteo_campo",
+                "source_root": str(source_root),
+                "utm_zone": utm_zone,
+                "ignored_extensions": ",".join(sorted(ignored_extensions)),
+            },
+        )
+
+        for variable in variable_values:
+            first_ext = None
+            for record in records:
+                if record["variable"] == variable:
+                    first_ext = record["variable_extension"]
+                    break
+            dataset[variable].attrs["source_extension"] = first_ext or variable
+            dataset[variable].attrs["units"] = VARIABLE_UNITS.get(first_ext or "", "")
+            if "lat_lon" in selected_coordinates and "utm_km" in selected_coordinates:
+                dataset[variable].attrs["coordinates"] = "x_km y_km lat lon"
+            elif "lat_lon" in selected_coordinates:
+                dataset[variable].attrs["coordinates"] = "lat lon"
+            else:
+                dataset[variable].attrs["coordinates"] = "x_km y_km"
+
+        netcdf_path = destination_root / "timeseries_meteo_campo.nc"
+        encoding = {variable: {"zlib": True, "complevel": 2} for variable in variable_values}
+        dataset.to_netcdf(netcdf_path, encoding=encoding)
+        outputs_created.append(str(netcdf_path))
+
+cell_columns = []
+for y_idx in range(ny):
+    for x_idx in range(nx):
+        cell_columns.append((f"cell_y{y_idx:03d}_x{x_idx:03d}", y_idx, x_idx))
+
+if "csv_long" in selected_formats:
+    long_path = destination_root / "timeseries_meteo_campo_long.csv"
+    base_fields = ["time_utc", "level", "variable", "value"]
+
+    if "utm_km" in selected_coordinates:
+        base_fields.extend(["x_km", "y_km"])
+    if "lat_lon" in selected_coordinates:
+        base_fields.extend(["lat", "lon"])
+
+    with long_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=base_fields)
+        writer.writeheader()
+
+        for variable in variable_values:
+            values = data_by_variable[variable]
+            for t_idx, dt_value in enumerate(time_values):
+                dt_text = dt_value.strftime("%Y-%m-%dT%H:%M:%SZ")
+                for l_idx, level in enumerate(level_values):
+                    plane = values[t_idx, l_idx]
+                    for y_idx in range(ny):
+                        for x_idx in range(nx):
+                            value = float(plane[y_idx, x_idx])
+                            if np.isnan(value):
+                                continue
+
+                            row = {
+                                "time_utc": dt_text,
+                                "level": level,
+                                "variable": variable,
+                                "value": value,
+                            }
+                            if "utm_km" in selected_coordinates:
+                                row["x_km"] = float(x_km[x_idx])
+                                row["y_km"] = float(y_km[y_idx])
+                            if "lat_lon" in selected_coordinates and lat_grid is not None and lon_grid is not None:
+                                row["lat"] = float(lat_grid[y_idx, x_idx])
+                                row["lon"] = float(lon_grid[y_idx, x_idx])
+
+                            writer.writerow(row)
+
+    outputs_created.append(str(long_path))
+
+if "csv_wide" in selected_formats:
+    cells_path = destination_root / "timeseries_meteo_campo_cells.csv"
+    cell_fields = ["cell_id", "x_index", "y_index"]
+    if "utm_km" in selected_coordinates:
+        cell_fields.extend(["x_km", "y_km"])
+    if "lat_lon" in selected_coordinates:
+        cell_fields.extend(["lat", "lon"])
+
+    with cells_path.open("w", newline="", encoding="utf-8") as cell_handle:
+        writer = csv.DictWriter(cell_handle, fieldnames=cell_fields)
+        writer.writeheader()
+        for cell_id, y_idx, x_idx in cell_columns:
+            row = {
+                "cell_id": cell_id,
+                "x_index": x_idx,
+                "y_index": y_idx,
+            }
+            if "utm_km" in selected_coordinates:
+                row["x_km"] = float(x_km[x_idx])
+                row["y_km"] = float(y_km[y_idx])
+            if "lat_lon" in selected_coordinates and lat_grid is not None and lon_grid is not None:
+                row["lat"] = float(lat_grid[y_idx, x_idx])
+                row["lon"] = float(lon_grid[y_idx, x_idx])
+            writer.writerow(row)
+
+    outputs_created.append(str(cells_path))
+
+    for variable in variable_values:
+        wide_path = destination_root / f"timeseries_meteo_campo_{variable}_wide.csv"
+        fieldnames = ["time_utc", "level"] + [cell_id for cell_id, _, _ in cell_columns]
+        with wide_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+
+            values = data_by_variable[variable]
+            for t_idx, dt_value in enumerate(time_values):
+                dt_text = dt_value.strftime("%Y-%m-%dT%H:%M:%SZ")
+                for l_idx, level in enumerate(level_values):
+                    row = {"time_utc": dt_text, "level": level}
+                    plane = values[t_idx, l_idx]
+                    for cell_id, y_idx, x_idx in cell_columns:
+                        value = float(plane[y_idx, x_idx])
+                        row[cell_id] = "" if np.isnan(value) else value
+                    writer.writerow(row)
+
+        outputs_created.append(str(wide_path))
+
+missing_combinations = 0
+for variable in variable_values:
+    values = data_by_variable[variable]
+    for t_idx in range(values.shape[0]):
+        for l_idx in range(values.shape[1]):
+            if np.isnan(values[t_idx, l_idx]).all():
+                missing_combinations += 1
+
+if missing_combinations:
+    warnings.append(
+        f"Combinazioni time/level senza dati: {missing_combinations}"
+    )
+
 summary = {
-    "status": "placeholder",
+    "status": "ok",
     "timeseries_type": "meteo_campo",
     "source_root": str(source_root),
     "destination_root": str(destination_root),
-    "message": "Template TimeSeries Meteo Campo caricato. Implementazione specifica da completare.",
+    "options_applied": {
+        "formats": sorted(selected_formats),
+        "coordinates": sorted(selected_coordinates),
+        "ignored_extensions": sorted(ignored_extensions),
+        "utm_zone": utm_zone,
+    },
+    "grid": {
+        "nx": nx,
+        "ny": ny,
+        "x_min_km": x_min,
+        "x_max_km": x_max,
+        "y_min_km": y_min,
+        "y_max_km": y_max,
+    },
+    "timesteps": len(time_values),
+    "levels": level_values,
+    "variables": variable_values,
+    "files_scanned": files_scanned,
+    "files_ignored_by_extension": files_ignored_by_extension,
+    "files_ignored_by_pattern": files_ignored_by_pattern,
+    "files_read": len(records),
+    "outputs_created": outputs_created,
+    "warnings": warnings,
 }
 
 print(json.dumps(summary, ensure_ascii=False))
