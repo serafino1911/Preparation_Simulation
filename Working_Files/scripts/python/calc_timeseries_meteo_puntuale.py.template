@@ -17,11 +17,28 @@ destination_root.mkdir(parents=True, exist_ok=True)
 # Formato atteso: meteo_{YYYYMMDD}_{point}.dat
 FILE_PATTERN = re.compile(r'^meteo_(\d{8})_(.+)\.dat$', re.IGNORECASE)
 
+HEADER_UNITS_MAP = {
+    'WS': 'WS (m/s)',
+    'WD': 'WD (deg)',
+    'T': 'T (K)',
+    'PG': 'PG (class)',
+    'PREC.RATE': 'Prec.Rate (mm/hr)',
+    'MIX.HGT': 'Mix.Hgt (m)',
+}
+
 
 def parse_column_names(header_line):
     raw_tokens = header_line.strip().split()
     time_cols = {'YEAR', 'MONTH', 'DAY', 'HOUR'}
-    return [token for token in raw_tokens if token.upper() not in time_cols]
+
+    renamed_columns = []
+    for token in raw_tokens:
+        token_upper = token.upper()
+        if token_upper in time_cols:
+            continue
+        renamed_columns.append(HEADER_UNITS_MAP.get(token_upper, token))
+
+    return renamed_columns
 
 
 def parse_dat_file(file_path):
