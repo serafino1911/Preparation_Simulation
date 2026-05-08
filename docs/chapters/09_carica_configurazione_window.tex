@@ -1,0 +1,25 @@
+\chapter{Finestra Carica Configurazione}
+\label{chap:carica-config}
+
+\section{Scopo}
+Questa finestra viene aperta da \emph{Carica Configurazione} nel menu principale.
+Permette di selezionare una configurazione salvata e ripristinarla nella sessione corrente.
+
+\section{Funzioni principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Lettura metadati da \texttt{saved\_configurations/*/metadata.json}
+  \item Visualizzazione elenco configurazioni con data
+  \item Selezione singola configurazione
+  \item Copia dei file JSON selezionati verso \texttt{temp\_config/}
+\end{itemize}
+
+\section{Comportamento operativo}
+\begin{enumerate}[leftmargin=1.8em]
+  \item L'app scandisce le cartelle salvate.
+  \item Costruisce la lista ordinata delle configurazioni disponibili.
+  \item Alla conferma, sovrascrive i JSON correnti in \texttt{temp\_config/}.
+  \item Mostra messaggio finale di successo o errore.
+\end{enumerate}
+
+\section{Relazione con il resto della UI}
+Dopo il caricamento, tutte le altre finestre usano i nuovi valori presenti in \texttt{temp\_config/}.

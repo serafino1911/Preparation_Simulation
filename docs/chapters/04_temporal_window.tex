@@ -1,0 +1,20 @@
+\chapter{Finestra Dominio Temporale (TemporalWindow)}
+
+\section{Scopo}
+Definisce l'intervallo temporale di simulazione (inizio/fine) e i parametri derivati.
+
+\section{Funzioni principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Selezione data e ora inizio simulazione.
+  \item Selezione data e ora fine simulazione.
+  \item Calcolo e verifica della durata complessiva.
+  \item Salvataggio in \texttt{temp\_config/temporal\_config.json}.
+\end{itemize}
+
+\section{Sottofinestre}
+\subsection{Calendario (open\_calendar)}
+La finestra apre un calendario in \texttt{tk.Toplevel} per semplificare la scelta delle date.
+Il dialog viene usato sia per data di inizio sia per data di fine.
+
+\section{Output e integrazione}
+Il file temporale viene letto dai moduli di generazione input CALMET/CALPUFF/CALPOST e dalle operazioni sul farm.

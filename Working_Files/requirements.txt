@@ -1,4 +1,6 @@
 pandas
 pyproj
+numpy
 netCDF4 == 1.5.8
+xarray
 scipy

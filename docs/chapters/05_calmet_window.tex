@@ -1,0 +1,21 @@
+\chapter{Finestra Configura CALMET (CalmetWindow)}
+
+\section{Scopo}
+Raccoglie i parametri necessari alla preparazione degli input CALMET.
+
+\section{Funzioni principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Impostazione parametri di dominio meteo e opzioni di run.
+  \item Caricamento/modifica valori di configurazione persistiti.
+  \item Validazione e salvataggio in \texttt{temp\_config/calmet\_config.json}.
+  \item Avvio preparazione file input CALMET (in combinazione con Operazioni Farm).
+\end{itemize}
+
+\section{Sottofinestre}
+La finestra non apre editor separati complessi nel flusso standard; opera principalmente all'interno della propria schermata.
+
+\section{Output e integrazione}
+\begin{itemize}[leftmargin=1.5em]
+  \item Config: \texttt{temp\_config/calmet\_config.json}
+  \item Output a valle: file in \texttt{CALMET\_INP/} e script batch correlati
+\end{itemize}

@@ -1,0 +1,22 @@
+\chapter{Finestra Definisci Dominio (DomainWindow)}
+
+\section{Scopo}
+Permette di definire il dominio geografico della simulazione tramite vertici e passo di griglia.
+La configurazione viene salvata in \texttt{temp\_config/domain\_config.json}.
+
+\section{Funzioni principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Inserimento/modifica coordinate dei vertici del dominio.
+  \item Definizione passo griglia con unita di misura.
+  \item Validazione geometrica di base del dominio.
+  \item Salvataggio configurazione temporanea.
+\end{itemize}
+
+\section{Sottofinestre}
+Nel flusso standard la finestra non apre sottofinestre dedicate: le operazioni sono gestite direttamente nella schermata principale del dominio.
+
+\section{Output e integrazione}
+\begin{itemize}[leftmargin=1.5em]
+  \item Output: \texttt{temp\_config/domain\_config.json}
+  \item File usato da: orografia/landuse, generatori \texttt{*.inp}, operazioni farm.
+\end{itemize}

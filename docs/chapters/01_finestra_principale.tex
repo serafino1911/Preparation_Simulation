@@ -1,0 +1,44 @@
+\chapter{Finestra Principale (ConfiguratorApp)}
+
+\section{Scopo}
+La finestra principale e il punto di ingresso del configuratore.
+Da qui l'utente apre tutte le finestre di configurazione di dominio, meteo, dispersione e operazioni farm.
+
+\section{Azioni disponibili}
+\begin{itemize}[leftmargin=1.5em]
+  \item Definisci Dominio
+  \item Orografia e Uso Terreno
+  \item Dominio Temporale
+  \item Configura CALMET
+  \item Configura CALPUFF
+  \item Configurazione Farm
+  \item Operazioni sul Farm
+  \item Salva Configurazione
+  \item Carica Configurazione
+  \item Clear Simulazion
+\end{itemize}
+
+\section{Sottofinestre e dialog dal main}
+\subsection{Dialog Salva Configurazione}
+Il comando \emph{Salva Configurazione} richiede un nome tramite dialog di input.
+Alla conferma copia i file \texttt{*.json} da \texttt{temp\_config/} in una nuova cartella timestampata in \texttt{saved\_configurations/} e crea \texttt{metadata.json}.
+
+\subsection{Finestra Carica Configurazione}
+Il comando \emph{Carica Configurazione} apre una finestra di selezione delle configurazioni salvate.
+Il dettaglio funzionale e riportato nel Capitolo~\ref{chap:carica-config}.
+
+\subsection{Dialog Conferma Pulizia}
+Il comando \emph{Clear Simulazion} mostra una conferma e, in caso positivo, svuota i contenuti di:
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{temp\_config/}
+  \item \texttt{Outputs/}
+  \item tutte le cartelle \texttt{*\_INP/}
+\end{itemize}
+Le cartelle vengono mantenute, ma il contenuto viene rimosso.
+
+\section{Dipendenze file principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Lettura/scrittura configurazioni temporanee in \texttt{temp\_config/}
+  \item Snapshot versionati in \texttt{saved\_configurations/}
+  \item Gestione artefatti intermedi in \texttt{Outputs/} e \texttt{*\_INP/}
+\end{itemize}

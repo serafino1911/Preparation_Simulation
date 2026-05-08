@@ -3952,6 +3952,7 @@ class FarmOperationsWindow:
                 target_client.exec_command(f'chmod +x "{script_path}"')
                 target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
+                script_path = f'source {work_folder}/.venv/bin/activate; {script_path}'
                 bsub_command = (
                     f'cd "{work_folder}"; '
                     f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
@@ -3980,7 +3981,7 @@ class FarmOperationsWindow:
                 )
                 return
 
-            remote_command = "python3 - <<'PY'\n" + remote_script + "\nPY"
+            remote_command = f"source {work_folder}/.venv/bin/activate; python3 - <<'PY'\n" + remote_script + "\nPY"
             self.log_message(f"Caricamento script TimeSeries {timeseries_kind} ed esecuzione...")
             stdin, stdout, stderr = target_client.exec_command(remote_command)
             output = stdout.read().decode().strip()

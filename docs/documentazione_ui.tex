@@ -1,0 +1,42 @@
+\documentclass[11pt,a4paper]{report}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{geometry}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\geometry{margin=2.5cm}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  pdftitle={Documentazione UI Configurator PM\_TEN}
+}
+
+\title{Documentazione Funzionale\\UI Configurator PM\_TEN}
+\author{Team PM\_TEN}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+\include{chapters/00_introduzione}
+\include{chapters/01_finestra_principale}
+\include{chapters/02_domain_window}
+\include{chapters/03_orography_window}
+\include{chapters/04_temporal_window}
+\include{chapters/05_calmet_window}
+\include{chapters/06_calpuff_window}
+\include{chapters/07_farm_window}
+\include{chapters/08_farm_operations_window}
+\include{chapters/09_carica_configurazione_window}
+
+\appendix
+\include{appendix/working_files}
+
+\end{document}

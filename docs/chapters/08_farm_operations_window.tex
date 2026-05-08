@@ -1,0 +1,42 @@
+\chapter{Finestra Operazioni sul Farm (FarmOperationsWindow)}
+
+\section{Scopo}
+Coordina il workflow operativo end-to-end verso il farm remoto: generazione input, upload, esecuzione batch e recupero risultati.
+
+\section{Funzioni principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Inizializzazione ambiente remoto.
+  \item Generazione e sincronizzazione file input.
+  \item Lancio catene CALMET/CALPUFF/CALPOST.
+  \item Post-processing e download output.
+\end{itemize}
+
+\section{Sottofinestre principali avviabili dall'utente}
+\subsection{Dialog Permessi (open\_permissions\_dialog)}
+Configura permessi operativi su file/cartelle remoti.
+
+\subsection{MeteoWindow}
+Apre la finestra meteo dedicata per parametri e preparazione dati meteorologici.
+
+\subsection{ConfigPuntualeWindow}
+Apre il dialog di configurazione puntuale tramite \texttt{ConfigPuntualeWindow.show\_dialog(...)}.
+
+\subsection{Dialog Aggregazione}
+Dialog per configurare aggregazione su risultati CSV.
+
+\subsection{Dialog Post-Process}
+Dialog per opzioni di post-processing e pipeline CALPOST.
+
+\subsection{Dialog Timeseries}
+Dialog per configurazione estrazione serie temporali (\texttt{\_show\_timeseries\_config\_dialog}).
+
+\subsection{Dialog Download Risultati}
+Dialog per selezionare e scaricare artefatti finali dal farm locale/remoto.
+
+\section{File e cartelle coinvolte}
+\begin{itemize}[leftmargin=1.5em]
+  \item Legge i JSON in \texttt{temp\_config/}
+  \item Usa template in \texttt{Working\_Files/scripts/}
+  \item Genera input intermedi in \texttt{Outputs/}
+  \item Popola \texttt{CALMET\_INP/}, \texttt{CALPUFF\_INP/}, \texttt{CALPOST\_INP/}
+\end{itemize}

@@ -1,0 +1,87 @@
+\chapter{Finestra Configura CALPUFF (CalpuffWindow)}
+
+\section{Scopo}
+La finestra CALPUFF e un hub di configurazione che apre sottofinestre specializzate per specie, sorgenti emissive e scaling factors.
+
+\section{Funzioni principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Parametri generali CALPUFF.
+  \item Apertura configuratori verticali per ogni tipologia di sorgente.
+  \item Salvataggio configurazione in \texttt{temp\_config/calpuff\_config.json}.
+\end{itemize}
+
+\section{Sottofinestre principali}
+\subsection{SpeciesWindow}
+Gestione specie chimiche.
+
+Sottofinestre di SpeciesWindow:
+\begin{itemize}[leftmargin=1.5em]
+  \item dialog selezione da database (\texttt{selection\_window});
+  \item editor specie dedicato (\texttt{SpeciesEditorWindow}).
+\end{itemize}
+
+\subsection{PointSourcesWindow}
+Gestione sorgenti puntuali.
+
+Sottofinestre di PointSourcesWindow:
+\begin{itemize}[leftmargin=1.5em]
+  \item dialog selezione sorgenti da database;
+  \item editor sorgente puntuale (\texttt{SourceEditorWindow}).
+\end{itemize}
+
+\subsection{AreaSourcesWindow}
+Gestione sorgenti areali.
+
+Sottofinestre di AreaSourcesWindow:
+\begin{itemize}[leftmargin=1.5em]
+  \item editor sorgente areale (\texttt{AreaSourceEditorWindow});
+  \item dialog inserimento vertice poligono.
+\end{itemize}
+
+\subsection{VolumeSourcesWindow}
+Gestione sorgenti volumetriche.
+
+Sottofinestre di VolumeSourcesWindow:
+\begin{itemize}[leftmargin=1.5em]
+  \item dialog selezione da database;
+  \item editor volumetrico (\texttt{VolumeSourceEditorWindow}).
+\end{itemize}
+
+\subsection{FlareSourcesWindow}
+Gestione sorgenti flare, con dialog per aggiunta file/dati e aggiornamento lista sorgenti.
+
+\subsection{RoadSourcesWindow}
+Gestione sorgenti stradali.
+
+Sottofinestre di RoadSourcesWindow:
+\begin{itemize}[leftmargin=1.5em]
+  \item editor sorgente stradale;
+  \item dialog aggiunta punto;
+  \item dialog modifica punto.
+\end{itemize}
+
+\subsection{LineSourcesWindow}
+Gestione sorgenti lineari.
+
+Sottofinestre di LineSourcesWindow:
+\begin{itemize}[leftmargin=1.5em]
+  \item editor linea emissiva;
+  \item dialog aggiunta punto;
+  \item dialog modifica punto.
+\end{itemize}
+
+\subsection{ScalingFactorsWindow}
+Gestione fattori di scala per sorgenti/specie.
+
+Sottofinestre di ScalingFactorsWindow:
+\begin{itemize}[leftmargin=1.5em]
+  \item dialog scelta tipo fattore;
+  \item dialog associazione fattore-sorgente/specie.
+\end{itemize}
+
+\section{Output e integrazione}
+\begin{itemize}[leftmargin=1.5em]
+  \item Config principale: \texttt{temp\_config/calpuff\_config.json}
+  \item Database di supporto in \texttt{saved\_configurations/} (es. sorgenti e specie)
+  \item Output a valle: file in \texttt{CALPUFF\_INP/}
+\end{itemize}

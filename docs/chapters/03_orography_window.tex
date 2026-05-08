@@ -1,0 +1,24 @@
+\chapter{Finestra Orografia e Uso Terreno (OrographyWindow)}
+
+\section{Scopo}
+Gestisce input e generazione dati geografici di orografia e uso del suolo necessari alla catena preprocessore.
+
+\section{Funzioni principali}
+\begin{itemize}[leftmargin=1.5em]
+  \item Selezione file DEM e parametri orografia.
+  \item Selezione file landuse e parametri di conversione.
+  \item Avvio processi di creazione output geografici.
+  \item Salvataggio configurazioni in file temporanei dedicati.
+\end{itemize}
+
+\section{Sottofinestre}
+\subsection{ProgressWindow}
+Durante la creazione di orografia o landuse viene aperta una finestra di progresso.
+La sottofinestra mostra stato avanzamento, messaggi operativi e completamento della procedura.
+
+\section{Output e integrazione}
+\begin{itemize}[leftmargin=1.5em]
+  \item Config locali: \texttt{temp\_config/orography\_config.json}, \texttt{temp\_config/landuse\_config.json}
+  \item Output intermedi tipici: file geografici in \texttt{Outputs/}
+  \item Uso a valle: generazione file \texttt{terrel.inp}, \texttt{ctgproc.inp}, \texttt{makegeo.inp}
+\end{itemize}

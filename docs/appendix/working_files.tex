@@ -1,0 +1,42 @@
+\chapter{Appendice: Working Files e Flusso Dati}
+
+\section{Panoramica cartelle operative}
+\begin{longtable}{p{0.22\textwidth} p{0.33\textwidth} p{0.38\textwidth}}
+\toprule
+\textbf{Cartella} & \textbf{Ruolo} & \textbf{Quando viene usata} \\
+\midrule
+\endhead
+\texttt{Working\_Files/} & Template e risorse statiche & Letta dai moduli service e da Operazioni Farm per generare script/input \\
+\texttt{temp\_config/} & Stato configurazione corrente & Scritta da ogni finestra UI durante la sessione \\
+\texttt{saved\_configurations/} & Snapshot persistenti configurazioni & Popolata da Salva Configurazione, letta da Carica Configurazione \\
+\texttt{Outputs/} & Artefatti intermedi locali & Popolata durante preprocessing geografico e preparazione input \\
+\texttt{CALMET\_INP/} & Input catena CALMET & Popolata in fase operativa farm \\
+\texttt{CALPUFF\_INP/} & Input catena CALPUFF & Popolata in fase operativa farm \\
+\texttt{CALPOST\_INP/} & Input catena CALPOST & Popolata in fase operativa farm \\
+\bottomrule
+\end{longtable}
+
+\section{Dettaglio Working\_Files}
+La cartella include:
+\begin{itemize}[leftmargin=1.5em]
+  \item template \texttt{*.txt} per generatori input (es. \texttt{terrel\_try.txt}, \texttt{calmet\_try.txt});
+  \item script template shell/python in \texttt{Working\_Files/scripts/};
+  \item dati di supporto geografico (DEM, landuse) usati dalle finestre dedicate.
+\end{itemize}
+
+\section{Flusso dati end-to-end}
+\begin{enumerate}[leftmargin=1.8em]
+  \item L'utente configura parametri nelle finestre UI.
+  \item Ogni finestra salva uno o piu JSON in \texttt{temp\_config/}.
+  \item Facoltativamente viene creato uno snapshot in \texttt{saved\_configurations/}.
+  \item Operazioni Farm legge \texttt{temp\_config/} e i template in \texttt{Working\_Files/}.
+  \item Vengono generati file intermedi in \texttt{Outputs/} e input dedicati in \texttt{*\_INP/}.
+  \item Avviene upload/esecuzione remota e successivo download dei risultati.
+\end{enumerate}
+
+\section{Note operative}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{Clear Simulazion} svuota i contenuti temporanei ma mantiene le cartelle.
+  \item I database di sorgenti/specie possono essere persistiti in \texttt{saved\_configurations/}.
+  \item L'appendice va aggiornata se cambia la struttura directory o il naming dei JSON.
+\end{itemize}
