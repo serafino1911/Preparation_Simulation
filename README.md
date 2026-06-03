@@ -99,8 +99,9 @@ La finestra iniziale (`ui_config_tool.py`) espone i pulsanti:
     - le sotto-app lavorano principalmente su `temp_config/calpuff_config.json`.
 
         Parametri principali usati nella configurazione CALPUFF non in una sotto sezione:
-
+        
  
+        | Parametro | Descrizione |
         |---|---|
         | **IOUTU** | Unita usate nei file binari di output di CALPUFF per concentrazioni e deposizioni. Tipicamente: 1 = massa (g/m^3), 2 = odore, 3 = radioattivita (Bq/m^3). |
         | **IPRTU** | Unita usate da CALPOST per stampare i risultati. 1 = g/m^3, 2 = mg/m^3, 3 = ug/m^3, 4 = ng/m^3, 5 = unita odorimetriche. |
