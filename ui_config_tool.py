@@ -1,7 +1,5 @@
 """
 UI Tool per la configurazione delle procedure di simulazione
-Autore: GitHub Copilot
-Data: 2025-12-30
 """
 
 import tkinter as tk
