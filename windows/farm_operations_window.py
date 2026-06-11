@@ -92,6 +92,70 @@ class FarmOperationsWindow:
             )
 
         return rendered
+
+    def _format_srtm_coord(self, value):
+        """Formatta una coordinata SRTM con precisione costante."""
+        return f"{float(value):.5f}"
+
+    def _extract_domain_bbox(self, domain_cfg):
+        """Estrae il bounding box del dominio da vertices NW/NE/SE/SW."""
+        if not isinstance(domain_cfg, dict):
+            raise ValueError("Configurazione dominio non valida")
+
+        vertices = domain_cfg.get('vertices', {})
+        if not isinstance(vertices, dict):
+            raise ValueError("Configurazione dominio senza vertices validi")
+
+        latitudes = []
+        longitudes = []
+        for corner in ('NW', 'NE', 'SE', 'SW'):
+            vertex = vertices.get(corner, {})
+            if not isinstance(vertex, dict):
+                raise ValueError(f"Vertice {corner} mancante o non valido")
+            try:
+                latitudes.append(float(vertex['lat']))
+                longitudes.append(float(vertex['lon']))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"Vertice {corner} mancante o non valido") from exc
+
+        return min(latitudes), min(longitudes), max(latitudes), max(longitudes)
+
+    def _parse_srtm_tile_name(self, tile_name):
+        """Parsa il nome di un tile SRTM nel formato SWlat_SWlon__NElat_NElon.xyz."""
+        pattern = re.compile(
+            r'^(?P<sw_lat>-?\d+(?:\.\d+)?)_(?P<sw_lon>-?\d+(?:\.\d+)?)__'
+            r'(?P<ne_lat>-?\d+(?:\.\d+)?)_(?P<ne_lon>-?\d+(?:\.\d+)?)\.xyz$',
+            re.IGNORECASE,
+        )
+        match = pattern.fullmatch(Path(tile_name).name)
+        if not match:
+            return None
+
+        return (
+            float(match.group('sw_lat')),
+            float(match.group('sw_lon')),
+            float(match.group('ne_lat')),
+            float(match.group('ne_lon')),
+        )
+
+    def _bbox_intersects(self, bbox_a, bbox_b):
+        """Verifica se due bounding box si intersecano."""
+        south_a, west_a, north_a, east_a = bbox_a
+        south_b, west_b, north_b, east_b = bbox_b
+        return not (
+            east_a < west_b or
+            east_b < west_a or
+            north_a < south_b or
+            north_b < south_a
+        )
+
+    def _srtm_output_name(self, bbox):
+        """Costruisce il nome finale SRTM nel formato standard."""
+        south, west, north, east = bbox
+        return (
+            f"{self._format_srtm_coord(south)}_{self._format_srtm_coord(west)}__"
+            f"{self._format_srtm_coord(north)}_{self._format_srtm_coord(east)}.xyz"
+        )
     
     def load_farm_config(self):
         """Carica la configurazione farm esistente"""
@@ -319,6 +383,13 @@ class FarmOperationsWindow:
         ).grid(row=5, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
 
         # RIGA 6
+        ttk.Button(
+            operations_frame,
+            text="🗻 SRTM",
+            command=self.launch_srtm,
+            width=button_width
+        ).grid(row=6, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+
         ttk.Button(
             operations_frame,
             text="📈 TimeSeries",
@@ -4009,6 +4080,203 @@ class FarmOperationsWindow:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante TimeSeries {timeseries_kind}:\n\n{str(e)}")
         finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
+
+    def launch_srtm(self):
+        """Scarica i tile SRTM che intersecano il dominio e li unisce in un file unico."""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: Launch SRTM")
+
+        thread = threading.Thread(target=self._launch_srtm_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _launch_srtm_thread(self):
+        """Thread per scaricare e unire i tile SRTM dal server remoto."""
+        jump_client = None
+        target_client = None
+        sftp = None
+        try:
+            domain_config = self._read_json_file_safe(self.temp_dir / "domain_config.json")
+            if not domain_config:
+                raise FileNotFoundError("domain_config.json non trovato o non valido")
+
+            domain_bbox = self._extract_domain_bbox(domain_config)
+            domain_name = self._srtm_output_name(domain_bbox).replace('.xyz', '')
+
+            workspace_root = self.temp_dir.parent
+            staging_root = workspace_root / "Outputs" / "SRTM" / domain_name
+            final_output_dir = workspace_root / "Working_Files"
+            final_output_dir.mkdir(parents=True, exist_ok=True)
+            staging_root.mkdir(parents=True, exist_ok=True)
+
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message(f"Connessione al Jump Server: {jump_username}@{jump_host}:{jump_port}")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            remote_srtm_root = "/project/pmten/SRTM"
+            remote_srtm_root_q = shlex.quote(remote_srtm_root)
+
+            self.log_message(f"Verifica cartella remota SRTM: {remote_srtm_root}")
+            stdin, stdout, stderr = target_client.exec_command(
+                f'test -d {remote_srtm_root_q} && echo "OK" || echo "FAIL"'
+            )
+            if stdout.read().decode().strip() != "OK":
+                error_text = stderr.read().decode().strip()
+                raise FileNotFoundError(
+                    f"Cartella remota SRTM non trovata: {remote_srtm_root}"
+                    + (f" ({error_text})" if error_text else "")
+                )
+
+            self.log_message("Ricerca tile SRTM nel dominio corrente...")
+            stdin, stdout, stderr = target_client.exec_command(
+                f'find {remote_srtm_root_q} -type f -name "*.xyz" -print'
+            )
+            remote_listing = [line.strip() for line in stdout.read().decode().splitlines() if line.strip()]
+            find_error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+            if exit_status != 0:
+                raise RuntimeError(find_error or f"Impossibile elencare i tile SRTM (exit code {exit_status})")
+
+            self.log_message(f"Tile remoti trovati: {len(remote_listing)}")
+
+            selected_tiles = []
+            for remote_path in remote_listing:
+                tile_bbox = self._parse_srtm_tile_name(remote_path)
+                if tile_bbox and self._bbox_intersects(tile_bbox, domain_bbox):
+                    selected_tiles.append({
+                        'remote_path': remote_path,
+                        'tile_name': Path(remote_path).name,
+                        'bbox': tile_bbox,
+                    })
+
+            if not selected_tiles:
+                raise RuntimeError("Nessun tile SRTM trovato che intersechi il dominio corrente")
+
+            selected_tiles.sort(key=lambda item: (item['bbox'][0], item['bbox'][1], item['bbox'][2], item['bbox'][3], item['tile_name']))
+
+            merged_bbox = (
+                min(tile['bbox'][0] for tile in selected_tiles),
+                min(tile['bbox'][1] for tile in selected_tiles),
+                max(tile['bbox'][2] for tile in selected_tiles),
+                max(tile['bbox'][3] for tile in selected_tiles),
+            )
+            merged_name = self._srtm_output_name(merged_bbox)
+            merged_output_path = final_output_dir / merged_name
+
+            self.log_message(f"Tile SRTM selezionati: {len(selected_tiles)}")
+
+            sftp = target_client.open_sftp()
+            downloaded_files = []
+            for tile in selected_tiles:
+                local_tile_path = staging_root / tile['tile_name']
+                self.log_message(f"  → Download: {tile['tile_name']}")
+                sftp.get(tile['remote_path'], str(local_tile_path))
+                downloaded_files.append(local_tile_path)
+
+            with open(merged_output_path, 'w', encoding='utf-8') as merged_file:
+                for local_tile_path in downloaded_files:
+                    tile_text = local_tile_path.read_text(encoding='utf-8')
+                    merged_file.write(tile_text)
+                    if tile_text and not tile_text.endswith('\n'):
+                        merged_file.write('\n')
+            
+            for local_tile_path in downloaded_files:
+                try:
+                    os.remove(local_tile_path)
+                except Exception:
+                    pass
+            try:
+                staging_root.rmdir()
+            except Exception:
+                pass
+
+            self.log_message(f"✓ Download completato: {len(downloaded_files)} file")
+            self.log_message(f"✓ File SRTM unito creato: {merged_output_path}")
+
+            messagebox.showinfo(
+                "Successo",
+                "Download SRTM completato con successo!\n\n"
+                f"Tile scaricati: {len(downloaded_files)}\n"
+                f"File finale:\n{merged_output_path}"
+            )
+
+            
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch SRTM:\n\n{str(e)}")
+        finally:
+            try:
+                if sftp:
+                    sftp.close()
+            except Exception:
+                pass
             try:
                 if target_client:
                     target_client.close()
