@@ -693,6 +693,7 @@ def table_going() -> str:
 def create_table(ele : dict) -> str:
     take_table = {}
     factor_type = ele["factor_type"]
+    print(f"Creating table for factor type: {factor_type}")
     if "_" not in factor_type:
         if factor_type == "MONTH12":
             take_table = TABELLA_FINALE_MONTH12
@@ -701,8 +702,24 @@ def create_table(ele : dict) -> str:
         elif factor_type == "DAY7":
             take_table = TABELLA_FINALE_DAY7
         else:
-            pass
-        return ", ".join(take_table[ele["index"]])
+            take_table = []
+
+        if isinstance(take_table, dict):
+            index_key = ele.get("index")
+            if index_key in take_table:
+                take_table = take_table[index_key]
+            elif str(index_key) in take_table:
+                take_table = take_table[str(index_key)]
+            else:
+                take_table = []
+
+        if not isinstance(take_table, list):
+            take_table = list(take_table)
+
+        print(f"Table for factor type {factor_type} created.")
+        print(take_table)
+        print(f"Returning table for factor type {factor_type}: {', '.join(str(x) for x in take_table)}")
+        return ", ".join(str(x) for x in take_table)
     elif factor_type == "HOUR24_DAY7":
         take_table_1 = TABELLA_FINALE_HOUR24[ele["index"]]
         take_table_2 = TABELLA_FINALE_DAY7[ele["index"]]
