@@ -782,10 +782,7 @@ class MeteoWindow:
     def _get_prtmet_template_path(self):
         return (
             Path(__file__).resolve().parent.parent
-            / "Base procedura"
-            / "pypack_day"
-            / "configuration_meteo"
-            / "lib"
+            / "Working_Files"
             / "prtmet_bp.txt"
         )
 
