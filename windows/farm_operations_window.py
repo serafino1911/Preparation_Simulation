@@ -397,6 +397,13 @@ class FarmOperationsWindow:
             width=button_width
         ).grid(row=6, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
 
+        ttk.Button(
+            operations_frame,
+            text="📊 Check BJobs",
+            command=self.check_bjobs,
+            width=button_width
+        ).grid(row=6, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+
         # === AREA OUTPUT/LOG ===
         log_frame = ttk.LabelFrame(main_frame, text="📄 Output Operation Log", padding="10")
         log_frame.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 8))
@@ -965,6 +972,10 @@ class FarmOperationsWindow:
         thread = threading.Thread(target=self._create_venv_thread)
         thread.daemon = True
         thread.start()
+
+    def check_bjobs(self):
+        """Esegue bjobs sul server farm e stampa il risultato nel log"""
+        self.execute_remote_command("bjobs -w", "Check Bjobs")
     
     def _create_venv_thread(self):
         """Thread per creare virtual environment e installare dipendenze"""
@@ -3207,6 +3218,7 @@ class FarmOperationsWindow:
         daily_var = tk.BooleanVar(value='daily' in saved_granularity)
         monthly_var = tk.BooleanVar(value='monthly' in saved_granularity)
         annual_var = tk.BooleanVar(value='annual' in saved_granularity)
+        all_var = tk.BooleanVar(value='all' in saved_granularity)
 
         tk.Checkbutton(dialog, text="Daily", variable=daily_var).grid(
             row=5, column=0, sticky='w', padx=24
@@ -3217,13 +3229,16 @@ class FarmOperationsWindow:
         tk.Checkbutton(dialog, text="Annual", variable=annual_var).grid(
             row=7, column=0, sticky='w', padx=24
         )
+        tk.Checkbutton(dialog, text="All data", variable=all_var).grid(
+            row=8, column=0, sticky='w', padx=24
+        )
 
         background_var = tk.BooleanVar(value=saved_background)
         tk.Checkbutton(
             dialog,
             text="Esegui in background con bsub -q pmten (job non monitorato)",
             variable=background_var
-        ).grid(row=8, column=0, columnspan=2, sticky='w', padx=24, pady=(8, 0))
+        ).grid(row=9, column=0, columnspan=2, sticky='w', padx=24, pady=(8, 0))
 
         def _on_ok():
             source_folder = source_var.get().strip()
@@ -3235,6 +3250,8 @@ class FarmOperationsWindow:
                 granularities.append('monthly')
             if annual_var.get():
                 granularities.append('annual')
+            if all_var.get():
+                granularities.append('all')
 
             if not source_folder:
                 messagebox.showerror("Errore", "La cartella sorgente non può essere vuota.", parent=dialog)
@@ -3256,7 +3273,7 @@ class FarmOperationsWindow:
             dialog.destroy()
 
         btn_frame = tk.Frame(dialog)
-        btn_frame.grid(row=9, column=0, columnspan=2, pady=(8, 12))
+        btn_frame.grid(row=10, column=0, columnspan=2, pady=(8, 12))
         tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
         tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
 
@@ -4396,6 +4413,7 @@ class FarmOperationsWindow:
         daily_var = tk.BooleanVar(value='daily' in saved_granularity)
         monthly_var = tk.BooleanVar(value='monthly' in saved_granularity)
         annual_var = tk.BooleanVar(value='annual' in saved_granularity)
+        all_var = tk.BooleanVar(value='all' in saved_granularity)
 
         tk.Checkbutton(dialog, text="Daily", variable=daily_var).grid(
             row=5, column=0, sticky='w', padx=24
@@ -4406,12 +4424,15 @@ class FarmOperationsWindow:
         tk.Checkbutton(dialog, text="Annual", variable=annual_var).grid(
             row=7, column=0, sticky='w', padx=24
         )
+        tk.Checkbutton(dialog, text="All data", variable=all_var).grid(
+            row=8, column=0, sticky='w', padx=24
+        )
 
         tk.Label(
             dialog,
             text="Percentili (preset + custom):",
             font=('TkDefaultFont', 10, 'bold')
-        ).grid(row=8, column=0, columnspan=2, sticky='w', padx=12, pady=(8, 2))
+        ).grid(row=9, column=0, columnspan=2, sticky='w', padx=12, pady=(8, 2))
 
         preset_values = [90.0, 95.0, 98.0, 99.0, 100.0]
         preset_vars = {}
@@ -4421,7 +4442,7 @@ class FarmOperationsWindow:
             preset_vars[preset] = var
             label = f"P{int(preset) if abs(preset - int(preset)) < 1e-6 else preset:g}"
             tk.Checkbutton(dialog, text=label, variable=var).grid(
-                row=9 + idx, column=0, sticky='w', padx=24
+                row=10 + idx, column=0, sticky='w', padx=24
             )
 
         custom_percentiles = [
@@ -4436,10 +4457,10 @@ class FarmOperationsWindow:
         )
 
         tk.Label(dialog, text="Custom (es. 92,97.5,100):").grid(
-            row=13, column=0, sticky='w', padx=24, pady=(2, 0)
+            row=15, column=0, sticky='w', padx=24, pady=(2, 0)
         )
         tk.Entry(dialog, textvariable=custom_var, width=24).grid(
-            row=14, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
+            row=16, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8)
         )
 
         background_var = tk.BooleanVar(value=saved_background)
@@ -4447,7 +4468,7 @@ class FarmOperationsWindow:
             dialog,
             text="Esegui in background con bsub -q pmten (job non monitorato)",
             variable=background_var
-        ).grid(row=15, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8))
+        ).grid(row=17, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8))
 
         def _normalize_percentiles(raw_values):
             unique_values = {}
@@ -4473,6 +4494,8 @@ class FarmOperationsWindow:
                 granularities.append('monthly')
             if annual_var.get():
                 granularities.append('annual')
+            if all_var.get():
+                granularities.append('all')
 
             percentile_values = []
             for preset, preset_var in preset_vars.items():
@@ -4530,7 +4553,7 @@ class FarmOperationsWindow:
             dialog.destroy()
 
         btn_frame = tk.Frame(dialog)
-        btn_frame.grid(row=16, column=0, columnspan=2, pady=(8, 12))
+        btn_frame.grid(row=18, column=0, columnspan=2, pady=(8, 12))
         tk.Button(btn_frame, text="OK", width=10, command=_on_ok).pack(side='left', padx=6)
         tk.Button(btn_frame, text="Annulla", width=10, command=_on_cancel).pack(side='left', padx=6)
 

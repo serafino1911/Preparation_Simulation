@@ -103,6 +103,8 @@ def period_units(granularity):
         return 'hours/day processed'
     if granularity == 'monthly':
         return 'hours/month processed'
+    if granularity == 'all':
+        return 'hours processed'
     return 'hours/year processed'
 
 
@@ -301,9 +303,10 @@ for parameter_dir in parameter_dirs:
     summary['parameters_processed'] += 1
     summary['details'][parameter_name] = {}
 
-    grouped = dict(daily={}, monthly={}, annual={})
+    grouped = dict(daily={}, monthly={}, annual={}, all={})
     unparsable = []
     for file_path in csv_files:
+        grouped['all'].setdefault('all_data', []).append(file_path)
         time_key = parse_time_key(file_path.name)
         if not time_key:
             unparsable.append(file_path.name)
@@ -313,7 +316,7 @@ for parameter_dir in parameter_dirs:
 
     if unparsable:
         summary['warnings'].append(
-            f"{parameter_name}: file con nome non riconosciuto ignorati ({len(unparsable)})"
+            f"{parameter_name}: file con nome non riconosciuto ignorati per aggregazioni daily/monthly/annual ({len(unparsable)})"
         )
         summary['skipped_files'].extend(unparsable)
 
