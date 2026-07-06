@@ -7,6 +7,7 @@ from tkinter import ttk, messagebox
 import json
 import math
 import os
+import re
 try:
     import tkintermapview
     MAPVIEW_AVAILABLE = True
@@ -41,12 +42,28 @@ class DomainWindow:
         # Passo della griglia (in km o gradi)
         self.grid_step = tk.StringVar(value="1.0")
         self.grid_step_unit = tk.StringVar(value="km")
+
+        # Modalita' di input delle coordinate del dominio
+        self.coordinate_system = tk.StringVar(value="latlon")
+        self.utm_zone = tk.StringVar(value="")
         
         # Origine griglia
         self.origin_lat = tk.DoubleVar(value=45.0)
         self.origin_lon = tk.DoubleVar(value=9.0)
+        self.origin_km_x = None
+        self.origin_km_y = None
         self.nx = tk.IntVar(value=100)
         self.ny = tk.IntVar(value=100)
+
+        # Controlli dinamici dei vertici
+        self.vertex_controls = {}
+        self.origin_controls = {}
+        self.utm_zone_frame = None
+        self.utm_zone_entry = None
+        self.display_coordinate_system = self.coordinate_system.get()
+        self.syncing_ui = False
+        self.is_updating_map = False
+        self.map_update_after_id = None
 
         # Se presente, carica una configurazione dominio già salvata
         self.load_existing_domain_config()
@@ -63,7 +80,8 @@ class DomainWindow:
         
         # Aggiorna la mappa quando cambiano origine o parametri della griglia
         for var in (self.origin_lat, self.origin_lon, self.grid_step, self.grid_step_unit, self.nx, self.ny):
-            var.trace_add('write', lambda *args: self.window.after(100, self.update_map))
+            var.trace_add('write', self.schedule_map_update)
+        self.utm_zone.trace_add('write', self.schedule_map_update)
         
         self.update_map()
 
@@ -77,6 +95,17 @@ class DomainWindow:
             with open(config_file, 'r', encoding='utf-8') as f:
                 domain_data = json.load(f)
 
+            coordinate_system = self.normalize_coordinate_system(
+                domain_data.get('coordinate_system') or domain_data.get('coordinate_type')
+            )
+            self.coordinate_system.set(coordinate_system)
+
+            zone_value = domain_data.get('zona_utm') or domain_data.get('utm_zone')
+            if zone_value:
+                normalized_zone = self.normalize_utm_zone(zone_value)
+                if normalized_zone:
+                    self.utm_zone.set(normalized_zone)
+
             vertices = domain_data.get('vertices', {})
             for key in ('NW', 'NE', 'SE', 'SW'):
                 vertex_data = vertices.get(key)
@@ -84,6 +113,10 @@ class DomainWindow:
                     continue
                 self.vertices[key]['lat'] = float(vertex_data.get('lat', self.vertices[key]['lat']))
                 self.vertices[key]['lon'] = float(vertex_data.get('lon', self.vertices[key]['lon']))
+                if vertex_data.get('km_x') is not None:
+                    self.vertices[key]['km_x'] = float(vertex_data.get('km_x'))
+                if vertex_data.get('km_y') is not None:
+                    self.vertices[key]['km_y'] = float(vertex_data.get('km_y'))
 
             grid_step = domain_data.get('grid_step', {})
             if 'value' in grid_step:
@@ -96,6 +129,10 @@ class DomainWindow:
                 self.origin_lat.set(float(grid_origin['lat']))
             if 'lon' in grid_origin:
                 self.origin_lon.set(float(grid_origin['lon']))
+            if 'km_x' in grid_origin and grid_origin['km_x'] is not None:
+                self.origin_km_x = float(grid_origin['km_x'])
+            if 'km_y' in grid_origin and grid_origin['km_y'] is not None:
+                self.origin_km_y = float(grid_origin['km_y'])
             if 'nx' in grid_origin:
                 self.nx.set(int(grid_origin['nx']))
             if 'ny' in grid_origin:
@@ -123,48 +160,99 @@ class DomainWindow:
         # === COLONNA SINISTRA: Controlli ===
         controls_frame = ttk.LabelFrame(main_frame, text="Parametri Dominio", padding="10")
         controls_frame.grid(row=0, column=0, rowspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
-        
+
+        # Modalita' coordinate
+        mode_frame = ttk.LabelFrame(controls_frame, text="Sistema di Coordinate", padding="8")
+        mode_frame.grid(row=0, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
+        ttk.Radiobutton(
+            mode_frame,
+            text="Lat / Lon",
+            variable=self.coordinate_system,
+            value="latlon",
+            command=self.refresh_coordinate_mode_ui
+        ).pack(side=tk.LEFT, padx=(0, 12))
+        utm_button = ttk.Radiobutton(
+            mode_frame,
+            text="UTM",
+            variable=self.coordinate_system,
+            value="utm",
+            command=self.refresh_coordinate_mode_ui
+        )
+        utm_button.pack(side=tk.LEFT)
+        if not PYPROJ_AVAILABLE:
+            utm_button.configure(state=tk.DISABLED)
+            ttk.Label(
+                mode_frame,
+                text="pyproj non disponibile: UTM disabilitato",
+                foreground="darkred"
+            ).pack(side=tk.LEFT, padx=(12, 0))
+
+        self.utm_zone_frame = ttk.Frame(controls_frame)
+        self.utm_zone_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 8))
+        ttk.Label(self.utm_zone_frame, text="Zona UTM:", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
+        self.utm_zone_entry = ttk.Entry(self.utm_zone_frame, textvariable=self.utm_zone, width=15)
+        self.utm_zone_entry.pack(side=tk.LEFT)
+        ttk.Label(
+            self.utm_zone_frame,
+            text="Formato: 32N, 33S, ...",
+            foreground="gray40"
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
         # Vertice Nord-Ovest
-        self.create_vertex_inputs(controls_frame, "Nord-Ovest (NW)", "NW", 0)
+        self.create_vertex_inputs(controls_frame, "Nord-Ovest (NW)", "NW", 2)
         
         # Vertice Nord-Est
-        self.create_vertex_inputs(controls_frame, "Nord-Est (NE)", "NE", 2)
+        self.create_vertex_inputs(controls_frame, "Nord-Est (NE)", "NE", 4)
         
         # Vertice Sud-Est
-        self.create_vertex_inputs(controls_frame, "Sud-Est (SE)", "SE", 4)
+        self.create_vertex_inputs(controls_frame, "Sud-Est (SE)", "SE", 6)
         
         # Vertice Sud-Ovest
-        self.create_vertex_inputs(controls_frame, "Sud-Ovest (SW)", "SW", 6)
+        self.create_vertex_inputs(controls_frame, "Sud-Ovest (SW)", "SW", 8)
         
         # Separatore
-        ttk.Separator(controls_frame, orient='horizontal').grid(row=8, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        ttk.Separator(controls_frame, orient='horizontal').grid(row=10, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Passo della griglia
-        ttk.Label(controls_frame, text="Passo Griglia:", font=('Arial', 10, 'bold')).grid(row=9, column=0, columnspan=3, sticky=tk.W, pady=(5, 2))
+        ttk.Label(controls_frame, text="Passo Griglia:", font=('Arial', 10, 'bold')).grid(row=11, column=0, columnspan=3, sticky=tk.W, pady=(5, 2))
         
         step_frame = ttk.Frame(controls_frame)
-        step_frame.grid(row=10, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        step_frame.grid(row=12, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
         
         ttk.Entry(step_frame, textvariable=self.grid_step, width=15).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Combobox(step_frame, textvariable=self.grid_step_unit, values=['km', 'gradi'], state='readonly', width=10).pack(side=tk.LEFT)
         
         # Separatore
-        ttk.Separator(controls_frame, orient='horizontal').grid(row=11, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        ttk.Separator(controls_frame, orient='horizontal').grid(row=13, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
         
         # Origine Griglia
-        ttk.Label(controls_frame, text="Origine Griglia:", font=('Arial', 10, 'bold')).grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=(5, 2))
+        ttk.Label(controls_frame, text="Origine Griglia:", font=('Arial', 10, 'bold')).grid(row=14, column=0, columnspan=3, sticky=tk.W, pady=(5, 2))
         
-        # Latitudine origine
         origin_frame1 = ttk.Frame(controls_frame)
-        origin_frame1.grid(row=13, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
-        ttk.Label(origin_frame1, text="Lat:").pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Entry(origin_frame1, textvariable=self.origin_lat, width=15).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(origin_frame1, text="Lon:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(origin_frame1, textvariable=self.origin_lon, width=15).pack(side=tk.LEFT)
+        origin_frame1.grid(row=15, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        origin_first_label = ttk.Label(origin_frame1, text="Lat:")
+        origin_first_label.pack(side=tk.LEFT, padx=(10, 5))
+        self.origin_first_var = tk.StringVar(value=self._format_coord_value(self.origin_lat.get()))
+        origin_first_entry = ttk.Entry(origin_frame1, textvariable=self.origin_first_var, width=15)
+        origin_first_entry.pack(side=tk.LEFT, padx=(0, 20))
+        origin_second_label = ttk.Label(origin_frame1, text="Lon:")
+        origin_second_label.pack(side=tk.LEFT, padx=(0, 5))
+        self.origin_second_var = tk.StringVar(value=self._format_coord_value(self.origin_lon.get()))
+        origin_second_entry = ttk.Entry(origin_frame1, textvariable=self.origin_second_var, width=15)
+        origin_second_entry.pack(side=tk.LEFT)
+
+        self.origin_controls = {
+            'first_label': origin_first_label,
+            'first_entry': origin_first_entry,
+            'first_var': self.origin_first_var,
+            'second_label': origin_second_label,
+            'second_entry': origin_second_entry,
+            'second_var': self.origin_second_var,
+        }
         
         # NX e NY
         origin_frame2 = ttk.Frame(controls_frame)
-        origin_frame2.grid(row=14, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+        origin_frame2.grid(row=16, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
         ttk.Label(origin_frame2, text="NX:").pack(side=tk.LEFT, padx=(10, 5))
         ttk.Entry(origin_frame2, textvariable=self.nx, width=15).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Label(origin_frame2, text="NY:").pack(side=tk.LEFT, padx=(0, 5))
@@ -172,7 +260,7 @@ class DomainWindow:
         
         # Bottoni azione
         button_frame = ttk.Frame(controls_frame)
-        button_frame.grid(row=15, column=0, columnspan=3, pady=20)
+        button_frame.grid(row=17, column=0, columnspan=3, pady=20)
         
         ttk.Button(button_frame, text="Salva", command=self.save_domain).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Annulla", command=self.window.destroy).pack(side=tk.LEFT, padx=5)
@@ -211,30 +299,333 @@ class DomainWindow:
             )
             fallback_label.grid(row=0, column=0, pady=50)
             self.map_widget = None
+
+        self.refresh_coordinate_mode_ui()
+        self.display_coordinate_system = self.normalize_coordinate_system(self.coordinate_system.get())
+
+        self.origin_first_var.trace_add('write', self.schedule_map_update)
+        self.origin_second_var.trace_add('write', self.schedule_map_update)
     
     def create_vertex_inputs(self, parent, label, vertex_key, row):
         """Crea gli input per un vertice"""
-        ttk.Label(parent, text=label, font=('Arial', 10, 'bold')).grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=(5, 2))
-        
-        # Latitudine
-        ttk.Label(parent, text="Lat:").grid(row=row+1, column=0, sticky=tk.W, padx=(10, 5))
-        lat_var = tk.DoubleVar(value=self.vertices[vertex_key]['lat'])
-        lat_entry = ttk.Entry(parent, textvariable=lat_var, width=15)
-        lat_entry.grid(row=row+1, column=1, sticky=(tk.W, tk.E), pady=2)
-        
-        # Longitudine
-        ttk.Label(parent, text="Lon:").grid(row=row+1, column=2, sticky=tk.W, padx=(10, 5))
-        lon_var = tk.DoubleVar(value=self.vertices[vertex_key]['lon'])
-        lon_entry = ttk.Entry(parent, textvariable=lon_var, width=15)
-        lon_entry.grid(row=row+1, column=2, sticky=(tk.W, tk.E), pady=2, padx=(40, 0))
-        
-        # Salva i riferimenti alle variabili
-        setattr(self, f'{vertex_key}_lat', lat_var)
-        setattr(self, f'{vertex_key}_lon', lon_var)
-        
-        # Aggiungi callback per mantenere il vincolo del rettangolo
-        lat_var.trace_add('write', lambda *args: self.on_vertex_change(vertex_key, 'lat'))
-        lon_var.trace_add('write', lambda *args: self.on_vertex_change(vertex_key, 'lon'))
+        vertex_frame = ttk.Frame(parent)
+        vertex_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=2)
+
+        ttk.Label(vertex_frame, text=label, font=('Arial', 10, 'bold')).grid(row=0, column=0, columnspan=4, sticky=tk.W, pady=(5, 2))
+
+        coord_row = ttk.Frame(vertex_frame)
+        coord_row.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=2)
+        coord_row.columnconfigure(1, weight=1)
+        coord_row.columnconfigure(3, weight=1)
+
+        first_label = ttk.Label(coord_row, text="")
+        first_label.grid(row=0, column=0, sticky=tk.W, padx=(10, 5))
+        first_var = tk.StringVar(value=self._format_coord_value(self.vertices[vertex_key].get('lat')))
+        first_entry = ttk.Entry(coord_row, textvariable=first_var, width=15)
+        first_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=2)
+
+        second_label = ttk.Label(coord_row, text="")
+        second_label.grid(row=0, column=2, sticky=tk.W, padx=(10, 5))
+        second_var = tk.StringVar(value=self._format_coord_value(self.vertices[vertex_key].get('lon')))
+        second_entry = ttk.Entry(coord_row, textvariable=second_var, width=15)
+        second_entry.grid(row=0, column=3, sticky=(tk.W, tk.E), pady=2)
+
+        self.vertex_controls[vertex_key] = {
+            'first_label': first_label,
+            'first_var': first_var,
+            'first_entry': first_entry,
+            'second_label': second_label,
+            'second_var': second_var,
+            'second_entry': second_entry,
+        }
+
+        first_var.trace_add('write', lambda *args, key=vertex_key: self.on_vertex_change(key, 'first'))
+        second_var.trace_add('write', lambda *args, key=vertex_key: self.on_vertex_change(key, 'second'))
+
+    def normalize_coordinate_system(self, value):
+        """Normalizza il sistema di coordinate scelto."""
+        if not value:
+            return 'latlon'
+
+        normalized = str(value).strip().lower().replace('_', '-')
+        if normalized in {'utm'}:
+            return 'utm'
+        return 'latlon'
+
+    def normalize_utm_zone(self, zone_value):
+        """Valida e normalizza una zona UTM nel formato `32N`."""
+        if zone_value is None:
+            return None
+
+        match = re.fullmatch(r'\s*(\d{1,2})\s*([NSns])\s*', str(zone_value))
+        if not match:
+            return None
+
+        zone_number = int(match.group(1))
+        if not 1 <= zone_number <= 60:
+            return None
+
+        hemisphere = match.group(2).upper()
+        return f"{zone_number}{hemisphere}"
+
+    def _format_coord_value(self, value):
+        """Formatta i valori numerici per la UI."""
+        if value is None:
+            return ""
+        try:
+            return f"{float(value):.6f}".rstrip('0').rstrip('.')
+        except (TypeError, ValueError):
+            return str(value)
+
+    def schedule_map_update(self, *args):
+        """Pianifica un aggiornamento mappa debounced, evitando rientri durante sync programmatici."""
+        if self.syncing_ui or self.updating_vertices or self.is_updating_map:
+            return
+
+        if self.map_update_after_id is not None:
+            try:
+                self.window.after_cancel(self.map_update_after_id)
+            except tk.TclError:
+                pass
+
+        self.map_update_after_id = self.window.after(100, self.update_map)
+
+    def get_effective_utm_zone(self, lat=None, lon=None):
+        """Restituisce la zona UTM da usare per le conversioni."""
+        zone = self.normalize_utm_zone(self.utm_zone.get())
+        if zone:
+            return zone
+
+        if lat is not None and lon is not None:
+            zone_from_latlon, _, _ = self.lat_lon_to_utm(lat, lon)
+            if zone_from_latlon:
+                return zone_from_latlon
+
+        for vertex in self.vertices.values():
+            vertex_lat = vertex.get('lat')
+            vertex_lon = vertex.get('lon')
+            if vertex_lat is None or vertex_lon is None:
+                continue
+            zone_from_latlon, _, _ = self.lat_lon_to_utm(vertex_lat, vertex_lon)
+            if zone_from_latlon:
+                return zone_from_latlon
+
+        return None
+
+    def refresh_coordinate_mode_ui(self):
+        """Aggiorna etichette e valori in base al sistema di coordinate attivo."""
+        if not self.vertex_controls:
+            return
+
+        current_mode = self.normalize_coordinate_system(self.coordinate_system.get())
+        previous_mode = self.normalize_coordinate_system(getattr(self, 'display_coordinate_system', current_mode))
+
+        if current_mode == 'utm' and not PYPROJ_AVAILABLE:
+            self.coordinate_system.set('latlon')
+            self.display_coordinate_system = 'latlon'
+            messagebox.showwarning(
+                "Avviso",
+                "Il sistema UTM richiede pyproj. La finestra restera' in modalita' Lat/Lon."
+            )
+            return
+
+        if current_mode == 'utm':
+            self.utm_zone_frame.grid()
+            first_label = 'X UTM (km):'
+            second_label = 'Y UTM (km):'
+        else:
+            self.utm_zone_frame.grid_remove()
+            first_label = 'Lat:'
+            second_label = 'Lon:'
+
+        zone_hint = self.normalize_utm_zone(self.utm_zone.get())
+
+        self.syncing_ui = True
+        self.updating_vertices = True
+        try:
+            for key, controls in self.vertex_controls.items():
+                controls['first_label'].configure(text=first_label)
+                controls['second_label'].configure(text=second_label)
+
+                vertex = self.vertices[key]
+                if previous_mode != current_mode:
+                    first_raw = controls['first_var'].get().strip()
+                    second_raw = controls['second_var'].get().strip()
+
+                    try:
+                        if previous_mode == 'latlon' and current_mode == 'utm':
+                            lat = float(first_raw)
+                            lon = float(second_raw)
+                            conversion_zone = zone_hint
+                            zone_from_conversion, km_x, km_y = self.lat_lon_to_utm(lat, lon, conversion_zone)
+                            if conversion_zone is None and zone_from_conversion:
+                                conversion_zone = zone_from_conversion
+                            if km_x is None or km_y is None:
+                                raise ValueError("Impossibile convertire le coordinate in UTM")
+                            vertex['lat'] = lat
+                            vertex['lon'] = lon
+                            vertex['km_x'] = km_x
+                            vertex['km_y'] = km_y
+                            controls['first_var'].set(self._format_coord_value(km_x))
+                            controls['second_var'].set(self._format_coord_value(km_y))
+                            if conversion_zone:
+                                self.utm_zone.set(conversion_zone)
+                        elif previous_mode == 'utm' and current_mode == 'latlon':
+                            if not zone_hint:
+                                raise ValueError("Inserire una zona UTM valida nel formato 32N, 33S, ...")
+                            km_x = float(first_raw)
+                            km_y = float(second_raw)
+                            lat, lon = self.utm_to_lat_lon(zone_hint, km_x, km_y)
+                            if lat is None or lon is None:
+                                raise ValueError("Impossibile convertire le coordinate UTM in lat/lon")
+                            vertex['lat'] = lat
+                            vertex['lon'] = lon
+                            vertex['km_x'] = km_x
+                            vertex['km_y'] = km_y
+                            controls['first_var'].set(self._format_coord_value(lat))
+                            controls['second_var'].set(self._format_coord_value(lon))
+                    except ValueError:
+                        self.coordinate_system.set(previous_mode)
+                        self.display_coordinate_system = previous_mode
+                        messagebox.showerror(
+                            "Errore",
+                            "Completa i valori dei vertici prima di cambiare sistema di coordinate."
+                        )
+                        return
+                else:
+                    if current_mode == 'utm':
+                        if vertex.get('km_x') is None or vertex.get('km_y') is None:
+                            current_zone = self.normalize_utm_zone(self.utm_zone.get()) or self.get_effective_utm_zone(vertex.get('lat'), vertex.get('lon'))
+                            if current_zone:
+                                _, km_x, km_y = self.lat_lon_to_utm(vertex.get('lat'), vertex.get('lon'), current_zone)
+                                if km_x is not None and km_y is not None:
+                                    vertex['km_x'] = km_x
+                                    vertex['km_y'] = km_y
+                        controls['first_var'].set(self._format_coord_value(vertex.get('km_x')))
+                        controls['second_var'].set(self._format_coord_value(vertex.get('km_y')))
+                    else:
+                        controls['first_var'].set(self._format_coord_value(vertex.get('lat')))
+                        controls['second_var'].set(self._format_coord_value(vertex.get('lon')))
+
+            self._refresh_origin_controls(current_mode, previous_mode, zone_hint)
+        finally:
+            self.updating_vertices = False
+            self.syncing_ui = False
+
+        self.utm_zone_entry.configure(state='normal')
+        self.display_coordinate_system = current_mode
+        self.schedule_map_update()
+
+    def _refresh_origin_controls(self, current_mode, previous_mode, zone_hint):
+        """Allinea i controlli dell'origine griglia alla modalita' attiva."""
+        if not self.origin_controls:
+            return
+
+        first_label = self.origin_controls['first_label']
+        second_label = self.origin_controls['second_label']
+        first_var = self.origin_first_var
+        second_var = self.origin_second_var
+
+        if current_mode == 'utm':
+            first_label.configure(text='X UTM:')
+            second_label.configure(text='Y UTM:')
+        else:
+            first_label.configure(text='Lat:')
+            second_label.configure(text='Lon:')
+
+        if previous_mode != current_mode:
+            try:
+                if previous_mode == 'latlon' and current_mode == 'utm':
+                    origin_lat = float(first_var.get())
+                    origin_lon = float(second_var.get())
+                    conversion_zone = zone_hint
+                    zone_from_conversion, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon, conversion_zone)
+                    if conversion_zone is None and zone_from_conversion:
+                        conversion_zone = zone_from_conversion
+                    if origin_km_x is None or origin_km_y is None:
+                        raise ValueError("Impossibile convertire l'origine griglia in UTM")
+                    self.origin_lat.set(origin_lat)
+                    self.origin_lon.set(origin_lon)
+                    self.origin_km_x = origin_km_x
+                    self.origin_km_y = origin_km_y
+                    first_var.set(self._format_coord_value(origin_km_x))
+                    second_var.set(self._format_coord_value(origin_km_y))
+                    if conversion_zone:
+                        self.utm_zone.set(conversion_zone)
+                elif previous_mode == 'utm' and current_mode == 'latlon':
+                    if not zone_hint:
+                        raise ValueError("Inserire una zona UTM valida nel formato 32N, 33S, ...")
+                    origin_km_x = float(first_var.get())
+                    origin_km_y = float(second_var.get())
+                    origin_lat, origin_lon = self.utm_to_lat_lon(zone_hint, origin_km_x, origin_km_y)
+                    if origin_lat is None or origin_lon is None:
+                        raise ValueError("Impossibile convertire l'origine griglia in lat/lon")
+                    self.origin_lat.set(origin_lat)
+                    self.origin_lon.set(origin_lon)
+                    self.origin_km_x = origin_km_x
+                    self.origin_km_y = origin_km_y
+                    first_var.set(self._format_coord_value(origin_lat))
+                    second_var.set(self._format_coord_value(origin_lon))
+            except ValueError:
+                self.coordinate_system.set(previous_mode)
+                self.display_coordinate_system = previous_mode
+                messagebox.showerror(
+                    "Errore",
+                    "Completa i valori dell'origine griglia prima di cambiare sistema di coordinate."
+                )
+                return
+        else:
+            if current_mode == 'utm':
+                if self.origin_km_x is None or self.origin_km_y is None:
+                    zone_for_origin = self.normalize_utm_zone(self.utm_zone.get()) or self.get_effective_utm_zone(self.origin_lat.get(), self.origin_lon.get())
+                    if zone_for_origin:
+                        _, origin_km_x, origin_km_y = self.lat_lon_to_utm(self.origin_lat.get(), self.origin_lon.get(), zone_for_origin)
+                        if origin_km_x is not None and origin_km_y is not None:
+                            self.origin_km_x = origin_km_x
+                            self.origin_km_y = origin_km_y
+                first_var.set(self._format_coord_value(self.origin_km_x))
+                second_var.set(self._format_coord_value(self.origin_km_y))
+            else:
+                first_var.set(self._format_coord_value(self.origin_lat.get()))
+                second_var.set(self._format_coord_value(self.origin_lon.get()))
+
+    def update_origin_from_ui(self, show_error=False):
+        """Aggiorna l'origine griglia dai campi visibili."""
+        try:
+            system = self.normalize_coordinate_system(self.coordinate_system.get())
+            zone = self.normalize_utm_zone(self.utm_zone.get())
+
+            if system == 'utm' and not zone:
+                raise ValueError("Inserire una zona UTM valida nel formato 32N, 33S, ...")
+
+            first_value = float(self.origin_first_var.get())
+            second_value = float(self.origin_second_var.get())
+
+            if system == 'utm':
+                self.origin_km_x = first_value
+                self.origin_km_y = second_value
+                origin_lat, origin_lon = self.utm_to_lat_lon(zone, self.origin_km_x, self.origin_km_y)
+                if origin_lat is None or origin_lon is None:
+                    raise ValueError("Impossibile convertire l'origine griglia in lat/lon")
+            else:
+                origin_lat = first_value
+                origin_lon = second_value
+                zone_from_latlon, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon, zone)
+                if zone is None and zone_from_latlon:
+                    self.utm_zone.set(zone_from_latlon)
+                self.origin_km_x = origin_km_x
+                self.origin_km_y = origin_km_y
+
+            self.origin_lat.set(origin_lat)
+            self.origin_lon.set(origin_lon)
+            return True
+        except (tk.TclError, ValueError):
+            if show_error:
+                if self.normalize_coordinate_system(self.coordinate_system.get()) == 'utm' and not self.normalize_utm_zone(self.utm_zone.get()):
+                    messagebox.showerror("Errore", "Inserire una zona UTM valida nel formato 32N, 33S, ...")
+                else:
+                    messagebox.showerror("Errore", "Inserire valori numerici validi per l'origine griglia")
+            return False
     
     def on_vertex_change(self, vertex_key, coord_type):
         """Gestisce le modifiche ai vertici per mantenere il vincolo del rettangolo"""
@@ -251,39 +642,39 @@ class DomainWindow:
             # NW e SW condividono la stessa longitudine (lato ovest)
             
             if vertex_key == 'NW':
-                if coord_type == 'lat':
-                    # Aggiorna NE lat (lato nord)
-                    self.NE_lat.set(self.NW_lat.get())
-                else:  # lon
-                    # Aggiorna SW lon (lato ovest)
-                    self.SW_lon.set(self.NW_lon.get())
+                if coord_type == 'first':
+                    # Aggiorna NE first (lato nord)
+                    self.vertex_controls['NE']['first_var'].set(self.vertex_controls['NW']['first_var'].get())
+                else:  # second
+                    # Aggiorna SW second (lato ovest)
+                    self.vertex_controls['SW']['second_var'].set(self.vertex_controls['NW']['second_var'].get())
             
             elif vertex_key == 'NE':
-                if coord_type == 'lat':
-                    # Aggiorna NW lat (lato nord)
-                    self.NW_lat.set(self.NE_lat.get())
-                else:  # lon
-                    # Aggiorna SE lon (lato est)
-                    self.SE_lon.set(self.NE_lon.get())
+                if coord_type == 'first':
+                    # Aggiorna NW first (lato nord)
+                    self.vertex_controls['NW']['first_var'].set(self.vertex_controls['NE']['first_var'].get())
+                else:  # second
+                    # Aggiorna SE second (lato est)
+                    self.vertex_controls['SE']['second_var'].set(self.vertex_controls['NE']['second_var'].get())
             
             elif vertex_key == 'SE':
-                if coord_type == 'lat':
-                    # Aggiorna SW lat (lato sud)
-                    self.SW_lat.set(self.SE_lat.get())
-                else:  # lon
-                    # Aggiorna NE lon (lato est)
-                    self.NE_lon.set(self.SE_lon.get())
+                if coord_type == 'first':
+                    # Aggiorna SW first (lato sud)
+                    self.vertex_controls['SW']['first_var'].set(self.vertex_controls['SE']['first_var'].get())
+                else:  # second
+                    # Aggiorna NE second (lato est)
+                    self.vertex_controls['NE']['second_var'].set(self.vertex_controls['SE']['second_var'].get())
             
             elif vertex_key == 'SW':
-                if coord_type == 'lat':
-                    # Aggiorna SE lat (lato sud)
-                    self.SE_lat.set(self.SW_lat.get())
-                else:  # lon
-                    # Aggiorna NW lon (lato ovest)
-                    self.NW_lon.set(self.SW_lon.get())
+                if coord_type == 'first':
+                    # Aggiorna SE first (lato sud)
+                    self.vertex_controls['SE']['first_var'].set(self.vertex_controls['SW']['first_var'].get())
+                else:  # second
+                    # Aggiorna NW second (lato ovest)
+                    self.vertex_controls['NW']['second_var'].set(self.vertex_controls['SW']['second_var'].get())
             
             # Aggiorna automaticamente la mappa
-            self.window.after(100, self.update_map)
+            self.schedule_map_update()
         
         except tk.TclError:
             # Ignora errori durante la modifica
@@ -291,20 +682,48 @@ class DomainWindow:
         finally:
             self.updating_vertices = False
     
-    def update_vertices_from_ui(self):
-        """Aggiorna i vertici dalle celle di input"""
+    def update_vertices_from_ui(self, show_error=False):
+        """Aggiorna i vertici dalle celle di input attive."""
         try:
-            self.vertices['NW']['lat'] = self.NW_lat.get()
-            self.vertices['NW']['lon'] = self.NW_lon.get()
-            self.vertices['NE']['lat'] = self.NE_lat.get()
-            self.vertices['NE']['lon'] = self.NE_lon.get()
-            self.vertices['SE']['lat'] = self.SE_lat.get()
-            self.vertices['SE']['lon'] = self.SE_lon.get()
-            self.vertices['SW']['lat'] = self.SW_lat.get()
-            self.vertices['SW']['lon'] = self.SW_lon.get()
+            system = self.normalize_coordinate_system(self.coordinate_system.get())
+            zone = self.normalize_utm_zone(self.utm_zone.get())
+
+            if system == 'utm' and not zone:
+                raise ValueError("Inserire una zona UTM valida nel formato 32N, 33S, ...")
+
+            for key in ('NW', 'NE', 'SE', 'SW'):
+                controls = self.vertex_controls[key]
+                first_value = float(controls['first_var'].get())
+                second_value = float(controls['second_var'].get())
+
+                if system == 'utm':
+                    km_x = first_value
+                    km_y = second_value
+                    lat, lon = self.utm_to_lat_lon(zone, km_x, km_y)
+                    if lat is None or lon is None:
+                        raise ValueError("Impossibile convertire le coordinate UTM in lat/lon")
+                else:
+                    lat = first_value
+                    lon = second_value
+                    zone_from_latlon, km_x, km_y = self.lat_lon_to_utm(lat, lon, zone)
+                    if zone is None and zone_from_latlon:
+                        zone = zone_from_latlon
+
+                self.vertices[key]['lat'] = lat
+                self.vertices[key]['lon'] = lon
+                self.vertices[key]['km_x'] = km_x
+                self.vertices[key]['km_y'] = km_y
+
+            if zone:
+                self.utm_zone.set(zone)
+
             return True
-        except tk.TclError:
-            messagebox.showerror("Errore", "Inserire valori numerici validi per latitudine e longitudine")
+        except (tk.TclError, ValueError):
+            if show_error:
+                if self.normalize_coordinate_system(self.coordinate_system.get()) == 'utm' and not self.normalize_utm_zone(self.utm_zone.get()):
+                    messagebox.showerror("Errore", "Inserire una zona UTM valida nel formato 32N, 33S, ...")
+                else:
+                    messagebox.showerror("Errore", "Inserire valori numerici validi per le coordinate del dominio")
             return False
     
     def km_to_degree_steps(self, step_km, reference_lat):
@@ -360,7 +779,8 @@ class DomainWindow:
         grid_lines = []
 
         if unit == 'km':
-            zona_utm, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon)
+            zona_utm = self.get_effective_utm_zone(origin_lat, origin_lon)
+            zona_utm, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon, zona_utm)
 
             if zona_utm and origin_km_x is not None and origin_km_y is not None:
                 max_km_x = origin_km_x + (nx * step_value)
@@ -409,9 +829,20 @@ class DomainWindow:
 
     def update_map(self):
         """Aggiorna la mappa con i vertici correnti"""
-        if not self.update_vertices_from_ui():
+        if self.is_updating_map:
             return
-        
+
+        self.is_updating_map = True
+        self.map_update_after_id = None
+
+        try:
+            if not self.update_vertices_from_ui(show_error=False):
+                return
+            if not self.update_origin_from_ui(show_error=False):
+                return
+        finally:
+            self.is_updating_map = False
+
         if self.map_widget is None:
             return
         
@@ -489,7 +920,7 @@ class DomainWindow:
             print(f"Errore in update_map: {e}")
             messagebox.showerror("Errore", f"Errore nell'aggiornamento della mappa: {str(e)}")
     
-    def lat_lon_to_utm(self, lat, lon):
+    def lat_lon_to_utm(self, lat, lon, zona_utm=None):
         """Converte coordinate lat/lon in coordinate UTM (km)
         
         Returns:
@@ -499,11 +930,16 @@ class DomainWindow:
             return None, None, None
         
         try:
-            # Determina la zona UTM dalla longitudine
-            zone_number = int((lon + 180) / 6) + 1
-            
-            # Determina l'emisfero
-            hemisphere = 'N' if lat >= 0 else 'S'
+            zone_override = self.normalize_utm_zone(zona_utm)
+            if zone_override:
+                zone_number = int(zone_override[:-1])
+                hemisphere = zone_override[-1].upper()
+            else:
+                # Determina la zona UTM dalla longitudine
+                zone_number = int((lon + 180) / 6) + 1
+                
+                # Determina l'emisfero
+                hemisphere = 'N' if lat >= 0 else 'S'
             
             # Crea il codice EPSG per la zona UTM
             # Zone UTM Nord: 32601-32660, Zone UTM Sud: 32701-32760
@@ -537,7 +973,9 @@ class DomainWindow:
     
     def save_domain(self):
         """Salva il dominio in un file JSON"""
-        if not self.update_vertices_from_ui():
+        if not self.update_vertices_from_ui(show_error=True):
+            return
+        if not self.update_origin_from_ui(show_error=True):
             return
         
         try:
@@ -545,19 +983,30 @@ class DomainWindow:
         except ValueError:
             messagebox.showerror("Errore", "Inserire un valore numerico valido per il passo della griglia")
             return
+
+        coordinate_system = self.normalize_coordinate_system(self.coordinate_system.get())
+        zona_utm = self.normalize_utm_zone(self.utm_zone.get()) or self.get_effective_utm_zone()
+
+        if coordinate_system == 'utm':
+            if not PYPROJ_AVAILABLE:
+                messagebox.showerror(
+                    "Errore",
+                    "Per salvare un dominio in UTM e' necessario installare pyproj."
+                )
+                return
+            if not zona_utm:
+                messagebox.showerror("Errore", "Inserire una zona UTM valida nel formato 32N, 33S, ...")
+                return
         
         # Converti le coordinate in UTM per ciascun vertice
         vertices_with_utm = {}
-        zona_utm = None
         
         for key, vertex in self.vertices.items():
             lat = vertex['lat']
             lon = vertex['lon']
             
             # Converti in UTM
-            zona, km_x, km_y = self.lat_lon_to_utm(lat, lon)
-            
-            # Salva la zona del primo vertice (dovrebbero essere tutti nella stessa zona)
+            zona, km_x, km_y = self.lat_lon_to_utm(lat, lon, zona_utm)
             if zona_utm is None:
                 zona_utm = zona
             
@@ -572,10 +1021,17 @@ class DomainWindow:
         # Converti anche l'origine griglia in UTM
         origin_lat = self.origin_lat.get()
         origin_lon = self.origin_lon.get()
-        origin_zona, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon)
+        origin_zona, origin_km_x, origin_km_y = self.lat_lon_to_utm(origin_lat, origin_lon, zona_utm)
+        if origin_km_x is None:
+            origin_km_x = self.origin_km_x
+        if origin_km_y is None:
+            origin_km_y = self.origin_km_y
         
         domain_data = {
+            'coordinate_system': coordinate_system,
+            'coordinate_type': 'UTM' if coordinate_system == 'utm' else 'lat-lon',
             'zona_utm': zona_utm,
+            'utm_zone': zona_utm,
             'vertices': vertices_with_utm,
             'grid_step': {
                 'value': grid_step_value,
