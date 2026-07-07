@@ -342,6 +342,7 @@ class OrographyWindow:
         # Calcola i bordi X e Y dalle coordinate dei vertici
         x_coords = [v['km_x'] for v in vertices.values() if v.get('km_x') is not None]
         y_coords = [v['km_y'] for v in vertices.values() if v.get('km_y') is not None]
+        zone_utm = domain_config.get('zona_utm', 'N/A')
         
         if not x_coords or not y_coords:
             messagebox.showerror(
@@ -368,11 +369,12 @@ class OrographyWindow:
             y_border,
             config_file,
             domain_config,
+            zone_utm,
             use_latlon=False
         )
     
     def _execute_orography_processing(self, orography_path, output_grid, output_oro, 
-                                       x_border, y_border, config_file, domain_config, use_latlon=False):
+                                       x_border, y_border, config_file, domain_config, zone_utm, use_latlon=False):
         """Esegue il processing dell'orografia, con supporto per retry in lat-lon"""
         
         # Crea la finestra di progresso
@@ -394,6 +396,7 @@ class OrographyWindow:
                     x_border,
                     y_border,
                     progress_window,
+                    zone_utm=zone_utm,
                     use_latlon=use_latlon
                 )
                 
@@ -406,7 +409,8 @@ class OrographyWindow:
                     'y_border': list(y_border),
                     'zona_utm': domain_config.get('zona_utm', 'N/A'),
                     'use_latlon': use_latlon,  # Salva se sono state usate coordinate lat-lon
-                    'coordinate_type': 'lat-lon' if use_latlon else 'UTM'
+                    'coordinate_type': 'lat-lon' if use_latlon else 'UTM',
+                    'zona_utm': zone_utm
                 }
                 
                 with open(config_file, 'w') as f:
@@ -468,6 +472,7 @@ class OrographyWindow:
                     lat_border,  # y_border = latitudine
                     config_file,
                     domain_config,
+                    zone_utm=zone_utm,
                     use_latlon=True
                 )
         else:
@@ -476,7 +481,7 @@ class OrographyWindow:
                 f"Errore durante la creazione dell'orografia:\n{result['error']}"
             )
     
-    def process_orography(self, input_file, output_grid, output_oro, x_border, y_border, progress_window=None, use_latlon=False):
+    def process_orography(self, input_file, output_grid, output_oro, x_border, y_border, progress_window=None, zone_utm=None, use_latlon=False):
         """Processa il file di orografia (equivalente a red_oro.py)
         
         Args:
@@ -505,13 +510,15 @@ class OrographyWindow:
         processed_lines = 0
         points_found = 0  # Contatore per i punti trovati all'interno del dominio
         last_progress = 20
+
+        zona = ''.join(ch for ch in str(zone_utm) if ch.isdigit()) if zone_utm and any(ch.isdigit() for ch in str(zone_utm)) else '32'
         
         with open(input_file, 'r') as f_in, \
              open(output_grid, 'w') as f_out1, \
              open(output_oro, 'w') as f_out2:
             
             # Scrive intestazioni fisse nei file di output
-            f_out2.write("1\n1\n32\n")
+            f_out2.write(f"1\n1\n{zona}\n")
             
             # Cicla su ogni riga del file di input
             for i, line in enumerate(f_in):
