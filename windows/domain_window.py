@@ -377,9 +377,9 @@ class DomainWindow:
         except (TypeError, ValueError):
             return str(value)
 
-    def schedule_map_update(self, *args):
+    def schedule_map_update(self, *args, force=False):
         """Pianifica un aggiornamento mappa debounced, evitando rientri durante sync programmatici."""
-        if self.syncing_ui or self.updating_vertices or self.is_updating_map:
+        if not force and (self.syncing_ui or self.updating_vertices or self.is_updating_map):
             return
 
         if self.map_update_after_id is not None:
@@ -633,54 +633,60 @@ class DomainWindow:
             return
         
         self.updating_vertices = True
+        should_update_map = False
         
         try:
-            # Vincoli del rettangolo:
-            # NW e NE condividono la stessa latitudine (lato nord)
-            # SE e SW condividono la stessa latitudine (lato sud)
-            # NE e SE condividono la stessa longitudine (lato est)
-            # NW e SW condividono la stessa longitudine (lato ovest)
+            # In Lat/Lon: first=lat (N/S), second=lon (E/W)
+            # In UTM: first=X (E/W), second=Y (N/S)
+            system = self.normalize_coordinate_system(self.coordinate_system.get())
+            is_utm = (system == 'utm')
+
+            # Coordina quale asse rappresenta N/S o E/W in base alla modalita'.
+            north_south_coord = 'second' if is_utm else 'first'
+            east_west_coord = 'first' if is_utm else 'second'
             
             if vertex_key == 'NW':
-                if coord_type == 'first':
-                    # Aggiorna NE first (lato nord)
-                    self.vertex_controls['NE']['first_var'].set(self.vertex_controls['NW']['first_var'].get())
-                else:  # second
-                    # Aggiorna SW second (lato ovest)
-                    self.vertex_controls['SW']['second_var'].set(self.vertex_controls['NW']['second_var'].get())
+                if coord_type == north_south_coord:
+                    # Lato nord: NW <-> NE
+                    self.vertex_controls['NE'][f'{coord_type}_var'].set(self.vertex_controls['NW'][f'{coord_type}_var'].get())
+                elif coord_type == east_west_coord:
+                    # Lato ovest: NW <-> SW
+                    self.vertex_controls['SW'][f'{coord_type}_var'].set(self.vertex_controls['NW'][f'{coord_type}_var'].get())
             
             elif vertex_key == 'NE':
-                if coord_type == 'first':
-                    # Aggiorna NW first (lato nord)
-                    self.vertex_controls['NW']['first_var'].set(self.vertex_controls['NE']['first_var'].get())
-                else:  # second
-                    # Aggiorna SE second (lato est)
-                    self.vertex_controls['SE']['second_var'].set(self.vertex_controls['NE']['second_var'].get())
+                if coord_type == north_south_coord:
+                    # Lato nord: NE <-> NW
+                    self.vertex_controls['NW'][f'{coord_type}_var'].set(self.vertex_controls['NE'][f'{coord_type}_var'].get())
+                elif coord_type == east_west_coord:
+                    # Lato est: NE <-> SE
+                    self.vertex_controls['SE'][f'{coord_type}_var'].set(self.vertex_controls['NE'][f'{coord_type}_var'].get())
             
             elif vertex_key == 'SE':
-                if coord_type == 'first':
-                    # Aggiorna SW first (lato sud)
-                    self.vertex_controls['SW']['first_var'].set(self.vertex_controls['SE']['first_var'].get())
-                else:  # second
-                    # Aggiorna NE second (lato est)
-                    self.vertex_controls['NE']['second_var'].set(self.vertex_controls['SE']['second_var'].get())
+                if coord_type == north_south_coord:
+                    # Lato sud: SE <-> SW
+                    self.vertex_controls['SW'][f'{coord_type}_var'].set(self.vertex_controls['SE'][f'{coord_type}_var'].get())
+                elif coord_type == east_west_coord:
+                    # Lato est: SE <-> NE
+                    self.vertex_controls['NE'][f'{coord_type}_var'].set(self.vertex_controls['SE'][f'{coord_type}_var'].get())
             
             elif vertex_key == 'SW':
-                if coord_type == 'first':
-                    # Aggiorna SE first (lato sud)
-                    self.vertex_controls['SE']['first_var'].set(self.vertex_controls['SW']['first_var'].get())
-                else:  # second
-                    # Aggiorna NW second (lato ovest)
-                    self.vertex_controls['NW']['second_var'].set(self.vertex_controls['SW']['second_var'].get())
+                if coord_type == north_south_coord:
+                    # Lato sud: SW <-> SE
+                    self.vertex_controls['SE'][f'{coord_type}_var'].set(self.vertex_controls['SW'][f'{coord_type}_var'].get())
+                elif coord_type == east_west_coord:
+                    # Lato ovest: SW <-> NW
+                    self.vertex_controls['NW'][f'{coord_type}_var'].set(self.vertex_controls['SW'][f'{coord_type}_var'].get())
             
-            # Aggiorna automaticamente la mappa
-            self.schedule_map_update()
+            # Richiede un aggiornamento mappa dopo avere rilasciato il lock di sync.
+            should_update_map = True
         
         except tk.TclError:
             # Ignora errori durante la modifica
             pass
         finally:
             self.updating_vertices = False
+            if should_update_map:
+                self.schedule_map_update(force=True)
     
     def update_vertices_from_ui(self, show_error=False):
         """Aggiorna i vertici dalle celle di input attive."""
