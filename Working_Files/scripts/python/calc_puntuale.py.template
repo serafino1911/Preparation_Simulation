@@ -329,6 +329,7 @@ outputs_created = 0
 parameters_set = set()
 points_set = set()
 details = {}
+combined_by_granularity = {}
 
 for (point_id, ix, iy, parameter), records in sorted(series.items(), key=lambda item: (item[0][0], item[0][3])):
     parameters_set.add(parameter)
@@ -339,6 +340,7 @@ for (point_id, ix, iy, parameter), records in sorted(series.items(), key=lambda 
     details.setdefault(point_key, {"raw_records": 0, "outputs_created": 0, "grouped": {}})
 
     file_base = f"timeseries_{safe_slug(point_id)}_i{ix}_j{iy}_{safe_slug(parameter)}"
+    combined_col = f"{safe_slug(point_id)}_i{ix}_j{iy}_{safe_slug(parameter)}"
 
     if include_raw:
         raw_dir = destination_root / "RAW" / parameter
@@ -369,6 +371,13 @@ for (point_id, ix, iy, parameter), records in sorted(series.items(), key=lambda 
         details[point_key]["outputs_created"] += 1
         details[point_key]["raw_records"] = len(records_sorted)
 
+        raw_combined = combined_by_granularity.setdefault("RAW", {"labels": {}, "columns": {}})
+        raw_col_values = raw_combined["columns"].setdefault(combined_col, {})
+        for rec in records_sorted:
+            key = rec["timestamp_sort"]
+            raw_col_values[key] = rec["value"]
+            raw_combined["labels"][key] = rec["timestamp"]
+
     for granularity in granularities:
         periods = {}
         for rec in records_sorted:
@@ -397,6 +406,39 @@ for (point_id, ix, iy, parameter), records in sorted(series.items(), key=lambda 
         outputs_created += 1
         details[point_key]["outputs_created"] += 1
         details[point_key]["grouped"][granularity] = len(periods)
+        gran_combined = combined_by_granularity.setdefault(granularity.upper(), {"labels": {}, "columns": {}})
+        gran_col_values = gran_combined["columns"].setdefault(combined_col, {})
+        for period_key, values in periods.items():
+            mean_value = average(values)
+            if mean_value is None:
+                continue
+            gran_col_values[period_key] = mean_value
+            gran_combined["labels"][period_key] = period_key
+
+combined_csv_files = {}
+for gran_name in sorted(combined_by_granularity.keys()):
+    gran_data = combined_by_granularity[gran_name]
+    labels = gran_data.get("labels", {})
+    columns = gran_data.get("columns", {})
+    if not labels or not columns:
+        continue
+
+    combined_columns = sorted(columns.keys())
+    sorted_keys = sorted(labels.keys())
+    combined_csv_path = destination_root / f"timeseries_all_points_{safe_slug(gran_name)}.csv"
+
+    with combined_csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, lineterminator="\n")
+        writer.writerow(["date_col"] + combined_columns)
+        for ts_key in sorted_keys:
+            row = [labels[ts_key]]
+            for col in combined_columns:
+                value = columns[col].get(ts_key)
+                row.append("" if value is None else f"{value:.6f}")
+            writer.writerow(row)
+
+    combined_csv_files[gran_name] = str(combined_csv_path)
+    outputs_created += 1
 
 summary = {
     "source_root": str(source_root),
@@ -407,6 +449,7 @@ summary = {
     "outputs_created": outputs_created,
     "requested_granularity": granularities,
     "include_raw": bool(include_raw),
+    "combined_csv_by_granularity": combined_csv_files,
     "warnings": warnings,
     "skipped_files": sorted(set(skipped_files)),
     "details": details,

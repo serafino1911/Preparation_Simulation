@@ -18,7 +18,7 @@ class ConfiguratorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Configuratore Simulazioni - PM_TEN")
-        self.root.geometry("400x610")
+        self.root.geometry("400x660")
         
         # Directory per i file temporanei
         self.temp_dir = Path("temp_config")
@@ -108,9 +108,17 @@ class ConfiguratorApp:
             width=30
         )
         farm_ops_btn.grid(row=7, column=0, pady=10)
+
+        farm_ops_simple_btn = ttk.Button(
+            main_frame,
+            text="Operazioni sul Farm (Semplice)",
+            command=self.open_farm_operations_window_simple,
+            width=30
+        )
+        farm_ops_simple_btn.grid(row=8, column=0, pady=10)
         
         # Separatore
-        ttk.Separator(main_frame, orient='horizontal').grid(row=8, column=0, sticky=(tk.W, tk.E), pady=15)
+        ttk.Separator(main_frame, orient='horizontal').grid(row=9, column=0, sticky=(tk.W, tk.E), pady=15)
         
         # Bottone Salva Configurazione
         save_config_btn = ttk.Button(
@@ -119,7 +127,7 @@ class ConfiguratorApp:
             command=self.save_configuration,
             width=30
         )
-        save_config_btn.grid(row=9, column=0, pady=10)
+        save_config_btn.grid(row=10, column=0, pady=10)
         
         # Bottone Carica Configurazione
         load_config_btn = ttk.Button(
@@ -128,7 +136,7 @@ class ConfiguratorApp:
             command=self.load_configuration,
             width=30
         )
-        load_config_btn.grid(row=10, column=0, pady=10)
+        load_config_btn.grid(row=11, column=0, pady=10)
 
         # Bottone pulizia simulazione
         clear_sim_btn = ttk.Button(
@@ -137,7 +145,7 @@ class ConfiguratorApp:
             command=self.clear_simulation,
             width=30
         )
-        clear_sim_btn.grid(row=11, column=0, pady=10)
+        clear_sim_btn.grid(row=12, column=0, pady=10)
 
         # Bottone Esci
         exit_btn = ttk.Button(
@@ -146,7 +154,7 @@ class ConfiguratorApp:
             command=self.root.quit,
             width=30
         )
-        exit_btn.grid(row=12, column=0, pady=10)
+        exit_btn.grid(row=13, column=0, pady=10)
         
         # Configura il grid
         self.root.columnconfigure(0, weight=1)
@@ -187,6 +195,11 @@ class ConfiguratorApp:
         """Apre la finestra per le operazioni sul Farm"""
         from windows.farm_operations_window import FarmOperationsWindow
         FarmOperationsWindow(self.root, self.temp_dir)
+
+    def open_farm_operations_window_simple(self):
+        """Apre la finestra per le operazioni sul Farm in modalità semplice"""
+        from windows.farm_operations_window_simple import FarmOperationsWindow_simple
+        FarmOperationsWindow_simple(self.root, self.temp_dir)
 
     def clear_simulation(self):
         """Elimina i file temporanei e svuota le cartelle *_INP senza rimuovere le cartelle base."""

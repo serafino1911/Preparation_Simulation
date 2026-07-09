@@ -7,6 +7,7 @@ from tkinter import ttk, messagebox, scrolledtext
 import json
 from pathlib import Path, PurePosixPath
 import threading
+import time
 import os
 import re
 import stat
@@ -22,8 +23,8 @@ except ImportError:
     PARAMIKO_AVAILABLE = False
 
 
-class FarmOperationsWindow:
-    """Finestra per eseguire operazioni sul Farm remoto"""
+class FarmOperationsWindow_simple:
+    """Finestra per eseguire operazioni sul Farm remoto in modalità semplice"""
     
     def __init__(self, parent, temp_dir):
         self.parent = parent
@@ -43,6 +44,17 @@ class FarmOperationsWindow:
         # Carica configurazione farm
         self.farm_config = self.load_farm_config()
         self._script_template_cache = {}
+        self._workflow_state_lock = threading.Lock()
+        self._workflow_running = {
+            "geographic": False,
+            "calmet": False,
+            "calpuff": False,
+            "calpost": False,
+        }
+        self.geographic_button = None
+        self.calmet_button = None
+        self.calpuff_button = None
+        self.calpost_button = None
         
         self.setup_ui()
 
@@ -93,10 +105,6 @@ class FarmOperationsWindow:
 
         return rendered
 
-    def _format_srtm_coord(self, value):
-        """Formatta una coordinata SRTM con precisione costante."""
-        return f"{float(value):.5f}"
-
     def _extract_domain_bbox(self, domain_cfg):
         """Estrae il bounding box del dominio da vertices NW/NE/SE/SW."""
         if not isinstance(domain_cfg, dict):
@@ -120,43 +128,6 @@ class FarmOperationsWindow:
 
         return min(latitudes), min(longitudes), max(latitudes), max(longitudes)
 
-    def _parse_srtm_tile_name(self, tile_name):
-        """Parsa il nome di un tile SRTM nel formato SWlat_SWlon__NElat_NElon.xyz."""
-        pattern = re.compile(
-            r'^(?P<sw_lat>-?\d+(?:\.\d+)?)_(?P<sw_lon>-?\d+(?:\.\d+)?)__'
-            r'(?P<ne_lat>-?\d+(?:\.\d+)?)_(?P<ne_lon>-?\d+(?:\.\d+)?)\.xyz$',
-            re.IGNORECASE,
-        )
-        match = pattern.fullmatch(Path(tile_name).name)
-        if not match:
-            return None
-
-        return (
-            float(match.group('sw_lat')),
-            float(match.group('sw_lon')),
-            float(match.group('ne_lat')),
-            float(match.group('ne_lon')),
-        )
-
-    def _bbox_intersects(self, bbox_a, bbox_b):
-        """Verifica se due bounding box si intersecano."""
-        south_a, west_a, north_a, east_a = bbox_a
-        south_b, west_b, north_b, east_b = bbox_b
-        return not (
-            east_a < west_b or
-            east_b < west_a or
-            north_a < south_b or
-            north_b < south_a
-        )
-
-    def _srtm_output_name(self, bbox):
-        """Costruisce il nome finale SRTM nel formato standard."""
-        south, west, north, east = bbox
-        return (
-            f"{self._format_srtm_coord(south)}_{self._format_srtm_coord(west)}__"
-            f"{self._format_srtm_coord(north)}_{self._format_srtm_coord(east)}.xyz"
-        )
-    
     def load_farm_config(self):
         """Carica la configurazione farm esistente"""
         config_file = self.temp_dir / "farm_config.json"
@@ -257,86 +228,46 @@ class FarmOperationsWindow:
             command=self.create_virtual_environment,
             width=button_width
         ).grid(row=0, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
+
         ttk.Button(
             operations_frame,
-            text="🗺️ Prepare Geographic",
-            command=self.prepare_geographic,
+            text="📊 Check BJobs",
+            command=self.check_bjobs,
             width=button_width
         ).grid(row=0, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
         
-        ttk.Button(
+        self.geographic_button = ttk.Button(
             operations_frame,
-            text="🚀 Launch Geographic",
-            command=self.launch_geographic,
+            text="Geographic",
+            command=self.run_geographic,
             width=button_width
-        ).grid(row=0, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+        )
+        self.geographic_button.grid(row=0, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
         
         # RIGA 1
-        ttk.Button(
+        self.calmet_button = ttk.Button(
             operations_frame,
-            text="🌤️ Prepare CALMET",
-            command=self.prepare_calmet,
+            text="CALMET",
+            command=self.run_calmet,
             width=button_width
-        ).grid(row=1, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+        )
+        self.calmet_button.grid(row=1, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
         
-        ttk.Button(
+        self.calpuff_button = ttk.Button(
             operations_frame,
-            text="📄 Load inp CALMET",
-            command=self.load_inp_calmet,
+            text="CALPUFF",
+            command=self.run_calpuff,
             width=button_width
-        ).grid(row=1, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+        )
+        self.calpuff_button.grid(row=1, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
         
-        ttk.Button(
+        self.calpost_button = ttk.Button(
             operations_frame,
-            text="🚀 Launch CALMET",
-            command=self.launch_calmet,
+            text="CALPOST",
+            command=self.run_calpost,
             width=button_width
-        ).grid(row=1, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
-        # RIGA 2
-        ttk.Button(
-            operations_frame,
-            text="💨 Prepare CALPUFF",
-            command=self.prepare_calpuff,
-            width=button_width
-        ).grid(row=2, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
-        ttk.Button(
-            operations_frame,
-            text="📄 Load inp CALPUFF",
-            command=self.load_inp_calpuff,
-            width=button_width
-        ).grid(row=2, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
-        ttk.Button(
-            operations_frame,
-            text="🚀 Launch CALPUFF",
-            command=self.launch_calpuff,
-            width=button_width
-        ).grid(row=2, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
-        # RIGA 3
-        ttk.Button(
-            operations_frame,
-            text="📊 Prepare CALPOST",
-            command=self.prepare_calpost,
-            width=button_width
-        ).grid(row=3, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
-        ttk.Button(
-            operations_frame,
-            text="📄 Load inp CALPOST",
-            command=self.load_inp_calpost,
-            width=button_width
-        ).grid(row=3, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-        
-        ttk.Button(
-            operations_frame,
-            text="🚀 Launch CALPOST",
-            command=self.launch_calpost,
-            width=button_width
-        ).grid(row=3, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+        )
+        self.calpost_button.grid(row=1, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
         
         # RIGA 4
         ttk.Button(
@@ -382,13 +313,7 @@ class FarmOperationsWindow:
             width=button_width
         ).grid(row=5, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
 
-        # RIGA 6
-        ttk.Button(
-            operations_frame,
-            text="🗻 SRTM",
-            command=self.launch_srtm,
-            width=button_width
-        ).grid(row=6, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+
 
         ttk.Button(
             operations_frame,
@@ -396,13 +321,6 @@ class FarmOperationsWindow:
             command=self.launch_timeseries,
             width=button_width
         ).grid(row=6, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
-
-        ttk.Button(
-            operations_frame,
-            text="📊 Check BJobs",
-            command=self.check_bjobs,
-            width=button_width
-        ).grid(row=6, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
 
         # === AREA OUTPUT/LOG ===
         log_frame = ttk.LabelFrame(main_frame, text="📄 Output Operation Log", padding="10")
@@ -976,6 +894,326 @@ class FarmOperationsWindow:
     def check_bjobs(self):
         """Esegue bjobs sul server farm e stampa il risultato nel log"""
         self.execute_remote_command("bjobs -w", "Check Bjobs")
+
+    def _validate_remote_operation_prerequisites(self):
+        """Valida prerequisiti comuni per operazioni SSH verso il farm."""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return False
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return False
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return False
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return False
+
+        return True
+
+    def _collect_local_inp_folders(self, folder_pattern, operation_name):
+        """Recupera e valida le cartelle INP locali richieste da un workflow."""
+        local_base_dir = self.temp_dir.parent
+        inp_folders = sorted([path for path in local_base_dir.glob(folder_pattern) if path.is_dir()])
+
+        if not inp_folders:
+            self.log_message(f"✗ Nessuna cartella {folder_pattern} trovata in: {local_base_dir}")
+            messagebox.showwarning(
+                "Attenzione",
+                f"Nessuna cartella {folder_pattern} trovata in:\n{local_base_dir}"
+            )
+            return None
+
+        self.log_message(f"{operation_name}: cartelle trovate ({len(inp_folders)}):")
+        for folder in inp_folders:
+            self.log_message(f"  - {folder.name}")
+
+        return inp_folders
+
+    def _extract_bsub_job_id(self, bsub_output):
+        """Estrae il job id LSF dall'output standard di bsub."""
+        match = re.search(r"<([0-9]+)>", bsub_output or "")
+        if not match:
+            return None
+        return match.group(1)
+
+    def _wait_for_lsf_job_completion(self, target_client, job_id, operation_name, poll_seconds=20):
+        """Attende il completamento di un job LSF monitorandone lo stato."""
+        success_states = {"DONE"}
+        failure_states = {"EXIT"}
+        running_states = {"PEND", "RUN", "PSUSP", "USUSP", "SSUSP", "UNKWN", "WAIT", "PROV"}
+
+        self.log_message(f"Monitoraggio job {operation_name} (ID {job_id}) in corso...")
+        last_status = None
+        unknown_attempts = 0
+
+        while True:
+            status_cmd = (
+                f'status=$(bjobs -a -noheader -o stat {job_id} 2>/dev/null | head -n 1 | tr -d "[:space:]"); '
+                f'if [ -n "$status" ]; then echo "$status"; else echo "UNKNOWN"; fi'
+            )
+            stdin, stdout, stderr = target_client.exec_command(status_cmd)
+            status = stdout.read().decode().strip().upper()
+            stdout.channel.recv_exit_status()
+
+            if status != last_status:
+                self.log_message(f"Stato job {job_id}: {status}")
+                last_status = status
+
+            if status in success_states:
+                self.log_message(f"✓ Job {job_id} completato con successo ({status})")
+                return True
+
+            if status in failure_states:
+                raise RuntimeError(f"Job {job_id} terminato con stato {status}")
+
+            if status == "UNKNOWN":
+                # Dopo la sottomissione LSF può impiegare qualche secondo a indicizzare il job.
+                unknown_attempts += 1
+                if unknown_attempts >= 12:
+                    raise RuntimeError(f"Job {job_id} non visibile in bjobs dopo {unknown_attempts} tentativi")
+                self.log_message(f"Job {job_id} non ancora visibile in bjobs, nuovo tentativo tra {poll_seconds}s...")
+            elif status not in running_states:
+                raise RuntimeError(f"Job {job_id} in stato inatteso: {status}")
+            else:
+                unknown_attempts = 0
+
+            time.sleep(poll_seconds)
+
+    def _set_button_enabled_async(self, button, enabled):
+        """Abilita/disabilita un ttk.Button in modo thread-safe."""
+        if button is None:
+            return
+
+        def _apply_state():
+            try:
+                if enabled:
+                    button.state(["!disabled"])
+                else:
+                    button.state(["disabled"])
+            except Exception:
+                pass
+
+        self.window.after(0, _apply_state)
+
+    def _acquire_workflow_run_lock(self, workflow_key, workflow_label, button):
+        """Acquisisce lock workflow e disabilita il relativo bottone se non già in esecuzione."""
+        with self._workflow_state_lock:
+            if self._workflow_running.get(workflow_key, False):
+                self.log_message(f"{workflow_label} già in esecuzione: richiesta ignorata.")
+                return False
+            self._workflow_running[workflow_key] = True
+
+        self._set_button_enabled_async(button, enabled=False)
+        return True
+
+    def _release_workflow_run_lock(self, workflow_key, button):
+        """Rilascia lock workflow e riabilita il relativo bottone."""
+        with self._workflow_state_lock:
+            self._workflow_running[workflow_key] = False
+        self._set_button_enabled_async(button, enabled=True)
+
+    def run_geographic(self):
+        """Esegue Prepare Geographic e Launch Geographic in sequenza."""
+        if not self._validate_remote_operation_prerequisites():
+            return
+
+        if not self._acquire_workflow_run_lock("geographic", "Geographic", self.geographic_button):
+            return
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: Geographic")
+        thread = threading.Thread(target=self._run_geographic_sequence_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _run_geographic_sequence_thread(self):
+        """Thread unificato per workflow Geographic."""
+        try:
+            if not self._prepare_geographic_thread():
+                return
+            self._launch_geographic_thread(wait_for_completion=True)
+        finally:
+            self._release_workflow_run_lock("geographic", self.geographic_button)
+
+    def run_calmet(self):
+        """Esegue Prepare CALMET, Load inp CALMET e Launch CALMET in sequenza."""
+        if not self._validate_remote_operation_prerequisites():
+            return
+
+        if not self._acquire_workflow_run_lock("calmet", "CALMET", self.calmet_button):
+            return
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: CALMET")
+        thread = threading.Thread(target=self._run_calmet_sequence_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _run_calmet_sequence_thread(self):
+        """Thread unificato per workflow CALMET."""
+        try:
+            if not self._prepare_folder_thread("CALMET", "Prepare CALMET", "CALMET", "CALMET"):
+                return
+
+            inp_folders = self._collect_local_inp_folders("CALMET_INP*", "Load inp CALMET")
+            if not inp_folders:
+                return
+            if not self._load_inp_folders_thread(inp_folders, "Load inp CALMET"):
+                return
+
+            launch_args = self._get_calmet_launch_args()
+            if not launch_args:
+                return
+            self._launch_calmet_thread(*launch_args, wait_for_completion=True)
+        finally:
+            self._release_workflow_run_lock("calmet", self.calmet_button)
+
+    def run_calpuff(self):
+        """Esegue Prepare CALPUFF, Load inp CALPUFF e Launch CALPUFF in sequenza."""
+        if not self._validate_remote_operation_prerequisites():
+            return
+
+        if not self._acquire_workflow_run_lock("calpuff", "CALPUFF", self.calpuff_button):
+            return
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: CALPUFF")
+        thread = threading.Thread(target=self._run_calpuff_sequence_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _run_calpuff_sequence_thread(self):
+        """Thread unificato per workflow CALPUFF."""
+        try:
+            if not self._prepare_folder_thread("CALPUFF", "Prepare CALPUFF", "CALPUFF", "CALPUFF"):
+                return
+
+            inp_folders = self._collect_local_inp_folders("CALPUFF_INP*", "Load inp CALPUFF")
+            if not inp_folders:
+                return
+            if not self._load_inp_folders_thread(inp_folders, "Load inp CALPUFF"):
+                return
+
+            launch_args = self._get_calpuff_launch_args()
+            if not launch_args:
+                return
+            self._launch_calpuff_thread(*launch_args, wait_for_completion=True)
+        finally:
+            self._release_workflow_run_lock("calpuff", self.calpuff_button)
+
+    def run_calpost(self):
+        """Esegue Prepare CALPOST, Load inp CALPOST e Launch CALPOST in sequenza."""
+        if not self._validate_remote_operation_prerequisites():
+            return
+
+        if not self._acquire_workflow_run_lock("calpost", "CALPOST", self.calpost_button):
+            return
+
+        self.log_message("\n" + "=" * 50)
+        self.log_message("Operazione: CALPOST")
+        thread = threading.Thread(target=self._run_calpost_sequence_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _run_calpost_sequence_thread(self):
+        """Thread unificato per workflow CALPOST."""
+        try:
+            if not self._prepare_folder_thread("CALPOST", "Prepare CALPOST", "CALPOST", "CALPOST"):
+                return
+
+            inp_folders = self._collect_local_inp_folders("CALPOST_INP*", "Load inp CALPOST")
+            if not inp_folders:
+                return
+            if not self._load_inp_folders_thread(inp_folders, "Load inp CALPOST"):
+                return
+
+            launch_args = self._get_calpost_launch_args()
+            if not launch_args:
+                return
+            self._launch_calpost_thread(*launch_args, wait_for_completion=True)
+        finally:
+            self._release_workflow_run_lock("calpost", self.calpost_button)
+
+    def _read_calmet_config(self):
+        """Legge calmet_config.json restituendo il dict di configurazione."""
+        calmet_config_path = self.temp_dir / "calmet_config.json"
+        if not calmet_config_path.exists():
+            messagebox.showerror(
+                "Errore",
+                "Configurazione CALMET non trovata.\n\n"
+                "Apri la finestra CALMET e salva la configurazione prima di continuare."
+            )
+            return None
+
+        try:
+            with open(calmet_config_path, 'r', encoding='utf-8') as config_file:
+                return json.load(config_file)
+        except Exception as e:
+            messagebox.showerror("Errore", f"Impossibile leggere calmet_config.json:\n\n{e}")
+            return None
+
+    def _get_calmet_launch_args(self):
+        """Costruisce gli argomenti necessari per launch CALMET."""
+        calmet_config = self._read_calmet_config()
+        if not calmet_config:
+            return None
+
+        wrf_path = str(calmet_config.get('wrf_path', '')).strip()
+        calmet_data = str(calmet_config.get('calmet_data', 'CALMETDATA')).strip() or 'CALMETDATA'
+        link_calmet = bool(calmet_config.get('link_calmet', calmet_config.get('link_CALMET', False)))
+
+        if not wrf_path:
+            messagebox.showerror(
+                "Errore",
+                "Il campo 'wrf_path' è vuoto nella configurazione CALMET.\n\n"
+                "Configura il percorso WRF nella finestra CALMET."
+            )
+            return None
+
+        self.log_message(f"wrf_path: {wrf_path}")
+        self.log_message(f"cartella output CALMET: {calmet_data}")
+        self.log_message(f"Modalità WRF: {'Link simbolici' if link_calmet else 'Copia file'}")
+        return wrf_path, calmet_data, link_calmet
+
+    def _get_calpuff_launch_args(self):
+        """Costruisce gli argomenti necessari per launch CALPUFF."""
+        calmet_config = self._read_calmet_config()
+        if not calmet_config:
+            return None
+
+        calpuff_data = str(calmet_config.get('calpuff_data', 'CALPUFFDATA')).strip() or 'CALPUFFDATA'
+        calmet_data = str(calmet_config.get('calmet_data', 'CALMETDATA')).strip() or 'CALMETDATA'
+        link_calmet = bool(calmet_config.get('link_calmet', calmet_config.get('link_CALMET', False)))
+
+        self.log_message(f"cartella output CALPUFF: {calpuff_data}")
+        self.log_message(f"Sorgente CALMET: {calmet_data}")
+        self.log_message(f"Modalità file meteo CALMET→CALPUFF: {'Link simbolici' if link_calmet else 'Copia file'}")
+        return calpuff_data, calmet_data, link_calmet
+
+    def _get_calpost_launch_args(self):
+        """Costruisce gli argomenti necessari per launch CALPOST."""
+        calmet_config = self._read_calmet_config()
+        if not calmet_config:
+            return None
+
+        calpost_data = str(calmet_config.get('calpost_data', 'CALPOSTDATA')).strip() or 'CALPOSTDATA'
+        calpuff_data = str(calmet_config.get('calpuff_data', 'CALPUFFDATA')).strip() or 'CALPUFFDATA'
+
+        self.log_message(f"cartella output CALPOST: {calpost_data}")
+        return calpost_data, calpuff_data
     
     def _create_venv_thread(self):
         """Thread per creare virtual environment e installare dipendenze"""
@@ -1122,6 +1360,8 @@ class FarmOperationsWindow:
     
     def _prepare_geographic_thread(self):
         """Thread per preparare i dati geografici"""
+        jump_client = None
+        target_client = None
         try:
             # Connessione al Jump Server
             jump_host = self.farm_config.get('ssh_host', '')
@@ -1304,13 +1544,11 @@ class FarmOperationsWindow:
             if errors:
                 self.log_message(f"  Errori ({len(errors)}): {', '.join(errors)}")
             
-            target_client.close()
-            jump_client.close()
-            
             # Messaggio finale
             if errors:
                 self.log_message("\n⚠ Prepare Geographic completato con errori")
                 messagebox.showwarning("Attenzione", f"Operazione completata con {len(errors)} errori.\nControlla il log per dettagli.")
+                return False
             elif copied_folders or uploaded_files:
                 self.log_message("\n✓ Prepare Geographic completato con successo!")
                 msg = f"Operazione completata!\n"
@@ -1321,13 +1559,27 @@ class FarmOperationsWindow:
                 if uploaded_files:
                     msg += f"File caricati: {len(uploaded_files)}"
                 messagebox.showinfo("Successo", msg)
+                return True
             else:
                 self.log_message("\n✓ Tutte le cartelle erano già presenti")
                 messagebox.showinfo("Info", "Tutte le cartelle geografiche erano già presenti.")
+                return True
             
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante l'esecuzione:\n\n{str(e)}")
+            return False
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def prepare_calmet(self):
         """Prepara CALMET copiando la cartella necessaria"""
@@ -1390,6 +1642,8 @@ class FarmOperationsWindow:
     
     def _prepare_folder_thread(self, folder_name, operation_name, source_folder_name, dest_folder_name):
         """Thread per preparare una cartella"""
+        jump_client = None
+        target_client = None
         try:
             # Connessione al Jump Server
             jump_host = self.farm_config.get('ssh_host', '')
@@ -1453,9 +1707,7 @@ class FarmOperationsWindow:
                 if not source_exists:
                     self.log_message(f"  ✗ ERRORE: Cartella sorgente non trovata: {source_path}")
                     messagebox.showerror("Errore", f"Cartella sorgente non trovata:\n{source_path}")
-                    target_client.close()
-                    jump_client.close()
-                    return
+                    return False
                 
                 # Copia la cartella
                 self.log_message(f"  → Copia in corso da: {source_path}")
@@ -1472,8 +1724,8 @@ class FarmOperationsWindow:
                 else:
                     self.log_message(f"  ✗ ERRORE durante la copia: {error}")
                     messagebox.showerror("Errore", f"Errore durante la copia:\n{error}")
-                
-                
+                    return False
+
                 self.log_message(f"\n✓ {operation_name} completato con successo!")
                 messagebox.showinfo("Successo", f"{operation_name} completato!\nCartella {dest_folder_name} copiata con successo.")
             
@@ -1488,13 +1740,23 @@ class FarmOperationsWindow:
                     self.log_message(f"  ✓ makegeo.dat copiato in CALMET")
                 else:
                     self.log_message(f"  ⊙ makegeo.dat non trovato (operazione facoltativa)")
-
-            target_client.close()
-            jump_client.close()
+            return True
             
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante l'esecuzione:\n\n{str(e)}")
+            return False
+        finally:
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def prepare_meteo(self):
         """Prepara i dati meteo copiando PRTMET_v4.34"""
@@ -1538,7 +1800,7 @@ class FarmOperationsWindow:
         thread.daemon = True
         thread.start()
     
-    def _launch_geographic_thread(self):
+    def _launch_geographic_thread(self, wait_for_completion=False):
         """Thread per lanciare la sequenza geografica TERREL → CTGPROC → MAKEGEO"""
         jump_client = None
         target_client = None
@@ -1629,7 +1891,10 @@ class FarmOperationsWindow:
                 self.log_message(f"Stderr bsub:\n{error}")
             
             if exit_status == 0:
+                job_id = self._extract_bsub_job_id(output)
                 self.log_message("\n✓ Job sottomesso con successo!")
+                if job_id:
+                    self.log_message(f"Job ID: {job_id}")
                 self.log_message("\nSequenza esecuzione:")
                 self.log_message("  1. TERREL → terrel.dat")
                 self.log_message("  2. CTGPROC → luse.dat")
@@ -1637,26 +1902,34 @@ class FarmOperationsWindow:
                 self.log_message("\nLog disponibili:")
                 self.log_message(f"  - Output: {working_folder}/geo_output.log")
                 self.log_message(f"  - Errori: {working_folder}/geo_error.log")
+
+                if wait_for_completion:
+                    if not job_id:
+                        raise RuntimeError("Impossibile monitorare il job Geographic: job ID non trovato nell'output bsub")
+                    self._wait_for_lsf_job_completion(target_client, job_id, "Geographic")
                 
                 messagebox.showinfo(
                     "Successo",
+                    "Job geografico completato con successo!\n\n"
+                    "Sequenza: TERREL → CTGPROC → MAKEGEO"
+                    if wait_for_completion else
                     "Job geografico sottomesso con successo!\n\n"
                     "Sequenza: TERREL → CTGPROC → MAKEGEO\n"
                     "Controlla i log per monitorare l'esecuzione."
                 )
+                return True
             else:
                 self.log_message(f"\n✗ Errore sottomissione job (exit code {exit_status})")
                 messagebox.showerror(
                     "Errore",
                     f"Errore durante la sottomissione del job.\nExit code: {exit_status}"
                 )
-            
-            target_client.close()
-            jump_client.close()
+                return False
             
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante Launch Geographic:\n\n{str(e)}")
+            return False
         finally:
             try:
                 if target_client:
@@ -2139,15 +2412,18 @@ class FarmOperationsWindow:
                     "Attenzione",
                     f"{operation_name} completato con errori.\nUpload riusciti: {len(uploaded)}\nErrori: {len(errors)}"
                 )
+                return False
             else:
                 messagebox.showinfo(
                     "Successo",
                     f"{operation_name} completato con successo!\nCartelle caricate: {len(uploaded)}"
                 )
+                return True
 
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante {operation_name}:\n\n{str(e)}")
+            return False
         finally:
             try:
                 if sftp:
@@ -2232,7 +2508,7 @@ class FarmOperationsWindow:
         thread.daemon = True
         thread.start()
 
-    def _launch_calmet_thread(self, wrf_path, calmet_data, link_calmet=False):
+    def _launch_calmet_thread(self, wrf_path, calmet_data, link_calmet=False, wait_for_completion=False):
         """Thread per preparare script remoto CALMET e sottometterlo via bsub"""
         jump_client = None
         target_client = None
@@ -2339,10 +2615,7 @@ class FarmOperationsWindow:
             if error:
                 self.log_message(f"Stderr bsub:\n{error}")
 
-            job_id = None
-            match = re.search(r"<([0-9]+)>", output or "")
-            if match:
-                job_id = match.group(1)
+            job_id = self._extract_bsub_job_id(output)
 
             if exit_status == 0:
                 self.log_message("\n✓ Job CALMET sottomesso con successo!")
@@ -2353,18 +2626,28 @@ class FarmOperationsWindow:
                 self.log_message(f"Error batch: {bsub_err}")
                 self.log_message(f"Output run-by-run in: {calmet_data_dir}")
 
+                if wait_for_completion:
+                    if not job_id:
+                        raise RuntimeError("Impossibile monitorare il job CALMET: job ID non trovato nell'output bsub")
+                    self._wait_for_lsf_job_completion(target_client, job_id, "CALMET")
+
                 messagebox.showinfo(
                     "Successo",
+                    "Job CALMET completato con successo!\n\n"
+                    "Esecuzione sequenziale completata per tutti i file .inp in CALMET_INP*.\n"
+                    if wait_for_completion else
                     "Job CALMET sottomesso con successo!\n\n"
                     "Esecuzione sequenziale avviata per tutti i file .inp in CALMET_INP*.\n"
                     f"Output e log disponibili in: {calmet_data_dir}"
                 )
+                return True
             else:
                 raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
 
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante Launch CALMET:\n\n{str(e)}")
+            return False
         finally:
             try:
                 if target_client:
@@ -2440,7 +2723,7 @@ class FarmOperationsWindow:
         thread.daemon = True
         thread.start()
 
-    def _launch_calpuff_thread(self, calpuff_data, calmet_data='CALMETDATA', link_calmet=False):
+    def _launch_calpuff_thread(self, calpuff_data, calmet_data='CALMETDATA', link_calmet=False, wait_for_completion=False):
         """Thread per preparare script remoto CALPUFF e sottometterlo via bsub"""
         jump_client = None
         target_client = None
@@ -2546,10 +2829,7 @@ class FarmOperationsWindow:
             if error:
                 self.log_message(f"Stderr bsub:\n{error}")
 
-            job_id = None
-            match = re.search(r"<([0-9]+)>", output or "")
-            if match:
-                job_id = match.group(1)
+            job_id = self._extract_bsub_job_id(output)
 
             if exit_status == 0:
                 self.log_message("\n✓ Job CALPUFF sottomesso con successo!")
@@ -2560,18 +2840,28 @@ class FarmOperationsWindow:
                 self.log_message(f"Error batch: {bsub_err}")
                 self.log_message(f"Output run-by-run in: {calpuff_data_dir}")
 
+                if wait_for_completion:
+                    if not job_id:
+                        raise RuntimeError("Impossibile monitorare il job CALPUFF: job ID non trovato nell'output bsub")
+                    self._wait_for_lsf_job_completion(target_client, job_id, "CALPUFF")
+
                 messagebox.showinfo(
                     "Successo",
+                    "Job CALPUFF completato con successo!\n\n"
+                    "Esecuzione sequenziale completata per tutti i file .inp in CALPUFF_INP*.\n"
+                    if wait_for_completion else
                     "Job CALPUFF sottomesso con successo!\n\n"
                     "Esecuzione sequenziale avviata per tutti i file .inp in CALPUFF_INP*.\n"
                     f"Output e log disponibili in: {calpuff_data_dir}"
                 )
+                return True
             else:
                 raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
 
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante Launch CALPUFF:\n\n{str(e)}")
+            return False
         finally:
             try:
                 if target_client:
@@ -2644,7 +2934,7 @@ class FarmOperationsWindow:
         thread.daemon = True
         thread.start()
 
-    def _launch_calpost_thread(self, calpost_data, calpuff_data):
+    def _launch_calpost_thread(self, calpost_data, calpuff_data, wait_for_completion=False):
         """Thread per preparare script remoto CALPOST e sottometterlo via bsub"""
         jump_client = None
         target_client = None
@@ -2751,10 +3041,7 @@ class FarmOperationsWindow:
             if error:
                 self.log_message(f"Stderr bsub:\n{error}")
 
-            job_id = None
-            match = re.search(r"<([0-9]+)>", output or "")
-            if match:
-                job_id = match.group(1)
+            job_id = self._extract_bsub_job_id(output)
 
             if exit_status == 0:
                 self.log_message("\n✓ Job CALPOST sottomesso con successo!")
@@ -2765,18 +3052,28 @@ class FarmOperationsWindow:
                 self.log_message(f"Error batch: {bsub_err}")
                 self.log_message(f"Output run-by-run in: {calpost_data_dir}")
 
+                if wait_for_completion:
+                    if not job_id:
+                        raise RuntimeError("Impossibile monitorare il job CALPOST: job ID non trovato nell'output bsub")
+                    self._wait_for_lsf_job_completion(target_client, job_id, "CALPOST")
+
                 messagebox.showinfo(
                     "Successo",
+                    "Job CALPOST completato con successo!\n\n"
+                    "Esecuzione sequenziale completata per tutti i file .inp in CALPOST_INP*.\n"
+                    if wait_for_completion else
                     "Job CALPOST sottomesso con successo!\n\n"
                     "Esecuzione sequenziale avviata per tutti i file .inp in CALPOST_INP*.\n"
                     f"Output e log disponibili in: {calpost_data_dir}"
                 )
+                return True
             else:
                 raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
 
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante Launch CALPOST:\n\n{str(e)}")
+            return False
         finally:
             try:
                 if target_client:
@@ -4095,203 +4392,6 @@ class FarmOperationsWindow:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
             messagebox.showerror("Errore", f"Errore durante TimeSeries {timeseries_kind}:\n\n{str(e)}")
         finally:
-            try:
-                if target_client:
-                    target_client.close()
-            except Exception:
-                pass
-            try:
-                if jump_client:
-                    jump_client.close()
-            except Exception:
-                pass
-
-    def launch_srtm(self):
-        """Scarica i tile SRTM che intersecano il dominio e li unisce in un file unico."""
-        if not PARAMIKO_AVAILABLE:
-            messagebox.showerror(
-                "Errore",
-                "Il modulo 'paramiko' non è installato.\n\n"
-                "Installa con: pip install paramiko"
-            )
-            return
-
-        if not self.farm_config:
-            messagebox.showerror(
-                "Errore",
-                "Nessuna configurazione farm trovata.\n\n"
-                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
-            )
-            return
-
-        if not self.jump_password.get():
-            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
-            return
-
-        if not self.same_credentials.get() and not self.target_password.get():
-            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
-            return
-
-        self.log_message("\n" + "=" * 50)
-        self.log_message("Operazione: Launch SRTM")
-
-        thread = threading.Thread(target=self._launch_srtm_thread)
-        thread.daemon = True
-        thread.start()
-
-    def _launch_srtm_thread(self):
-        """Thread per scaricare e unire i tile SRTM dal server remoto."""
-        jump_client = None
-        target_client = None
-        sftp = None
-        try:
-            domain_config = self._read_json_file_safe(self.temp_dir / "domain_config.json")
-            if not domain_config:
-                raise FileNotFoundError("domain_config.json non trovato o non valido")
-
-            domain_bbox = self._extract_domain_bbox(domain_config)
-            domain_name = self._srtm_output_name(domain_bbox).replace('.xyz', '')
-
-            workspace_root = self.temp_dir.parent
-            staging_root = workspace_root / "Outputs" / "SRTM" / domain_name
-            final_output_dir = workspace_root / "Working_Files"
-            final_output_dir.mkdir(parents=True, exist_ok=True)
-            staging_root.mkdir(parents=True, exist_ok=True)
-
-            jump_host = self.farm_config.get('ssh_host', '')
-            jump_port = int(self.farm_config.get('ssh_port', 22))
-            jump_username = self.farm_config.get('ssh_username', '')
-            jump_password = self.jump_password.get()
-
-            self.log_message(f"Connessione al Jump Server: {jump_username}@{jump_host}:{jump_port}")
-
-            jump_client = paramiko.SSHClient()
-            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            jump_client.connect(
-                hostname=jump_host,
-                port=jump_port,
-                username=jump_username,
-                password=jump_password
-            )
-
-            target_host = self.farm_config.get('target_host', '')
-            target_username = self.farm_config.get('target_username', jump_username)
-            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
-
-            jump_transport = jump_client.get_transport()
-            dest_addr = (target_host, 22)
-            local_addr = (jump_host, jump_port)
-            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
-
-            target_client = paramiko.SSHClient()
-            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            target_client.connect(
-                hostname=target_host,
-                username=target_username,
-                password=target_password,
-                sock=jump_channel
-            )
-
-            self.log_message("✓ Connesso al farm")
-
-            remote_srtm_root = "/project/pmten/SRTM"
-            remote_srtm_root_q = shlex.quote(remote_srtm_root)
-
-            self.log_message(f"Verifica cartella remota SRTM: {remote_srtm_root}")
-            stdin, stdout, stderr = target_client.exec_command(
-                f'test -d {remote_srtm_root_q} && echo "OK" || echo "FAIL"'
-            )
-            if stdout.read().decode().strip() != "OK":
-                error_text = stderr.read().decode().strip()
-                raise FileNotFoundError(
-                    f"Cartella remota SRTM non trovata: {remote_srtm_root}"
-                    + (f" ({error_text})" if error_text else "")
-                )
-
-            self.log_message("Ricerca tile SRTM nel dominio corrente...")
-            stdin, stdout, stderr = target_client.exec_command(
-                f'find {remote_srtm_root_q} -type f -name "*.xyz" -print'
-            )
-            remote_listing = [line.strip() for line in stdout.read().decode().splitlines() if line.strip()]
-            find_error = stderr.read().decode().strip()
-            exit_status = stdout.channel.recv_exit_status()
-            if exit_status != 0:
-                raise RuntimeError(find_error or f"Impossibile elencare i tile SRTM (exit code {exit_status})")
-
-            self.log_message(f"Tile remoti trovati: {len(remote_listing)}")
-
-            selected_tiles = []
-            for remote_path in remote_listing:
-                tile_bbox = self._parse_srtm_tile_name(remote_path)
-                if tile_bbox and self._bbox_intersects(tile_bbox, domain_bbox):
-                    selected_tiles.append({
-                        'remote_path': remote_path,
-                        'tile_name': Path(remote_path).name,
-                        'bbox': tile_bbox,
-                    })
-
-            if not selected_tiles:
-                raise RuntimeError("Nessun tile SRTM trovato che intersechi il dominio corrente")
-
-            selected_tiles.sort(key=lambda item: (item['bbox'][0], item['bbox'][1], item['bbox'][2], item['bbox'][3], item['tile_name']))
-
-            merged_bbox = (
-                min(tile['bbox'][0] for tile in selected_tiles),
-                min(tile['bbox'][1] for tile in selected_tiles),
-                max(tile['bbox'][2] for tile in selected_tiles),
-                max(tile['bbox'][3] for tile in selected_tiles),
-            )
-            merged_name = self._srtm_output_name(merged_bbox)
-            merged_output_path = final_output_dir / merged_name
-
-            self.log_message(f"Tile SRTM selezionati: {len(selected_tiles)}")
-
-            sftp = target_client.open_sftp()
-            downloaded_files = []
-            for tile in selected_tiles:
-                local_tile_path = staging_root / tile['tile_name']
-                self.log_message(f"  → Download: {tile['tile_name']}")
-                sftp.get(tile['remote_path'], str(local_tile_path))
-                downloaded_files.append(local_tile_path)
-
-            with open(merged_output_path, 'w', encoding='utf-8') as merged_file:
-                for local_tile_path in downloaded_files:
-                    tile_text = local_tile_path.read_text(encoding='utf-8')
-                    merged_file.write(tile_text)
-                    if tile_text and not tile_text.endswith('\n'):
-                        merged_file.write('\n')
-            
-            for local_tile_path in downloaded_files:
-                try:
-                    os.remove(local_tile_path)
-                except Exception:
-                    pass
-            try:
-                staging_root.rmdir()
-            except Exception:
-                pass
-
-            self.log_message(f"✓ Download completato: {len(downloaded_files)} file")
-            self.log_message(f"✓ File SRTM unito creato: {merged_output_path}")
-
-            messagebox.showinfo(
-                "Successo",
-                "Download SRTM completato con successo!\n\n"
-                f"Tile scaricati: {len(downloaded_files)}\n"
-                f"File finale:\n{merged_output_path}"
-            )
-
-            
-
-        except Exception as e:
-            self.log_message(f"\n✗ ERRORE: {str(e)}")
-            messagebox.showerror("Errore", f"Errore durante Launch SRTM:\n\n{str(e)}")
-        finally:
-            try:
-                if sftp:
-                    sftp.close()
-            except Exception:
-                pass
             try:
                 if target_client:
                     target_client.close()
