@@ -258,7 +258,12 @@ def generate_daily_inp_files(
     landuse_config_path: Path,
     output_dir: Path | None = None,
 ) -> list[Path]:
-    """Genera un file .inp CALPUFF per ogni giorno del periodo temporale."""
+    """Genera due file .inp CALPUFF per ogni giorno del periodo temporale.
+
+    Per ogni giorno vengono creati:
+    - calpuff_YYYYMMDD.inp con restart=3
+    - calpuff_YYYYMMDD_NR.inp con restart=2
+    """
     calpuff_config = _read_json(Path(calpuff_config_path))
     temporal_config = _read_json(Path(temporal_config_path))
     calmet_config = _read_json(Path(calmet_config_path))
@@ -286,11 +291,11 @@ def generate_daily_inp_files(
     current_date = start_date
     while current_date <= end_date:
         day_token = current_date.strftime('%Y%m%d')
-        calpuff_writer(calmet_output, day_token, 1, str(resolved_output_dir))
+        calpuff_writer(calmet_output, day_token, 1, str(resolved_output_dir), restart=3)
 
         generated_file = resolved_output_dir / 'calpuff.inp'
         if not generated_file.exists():
-            raise FileNotFoundError(f'File CALPUFF non generato per {day_token}')
+            raise FileNotFoundError(f'File CALPUFF non generato per {day_token} (restart=3)')
 
         target_file = resolved_output_dir / f'calpuff_{day_token}.inp'
         if target_file.exists():
@@ -298,12 +303,24 @@ def generate_daily_inp_files(
         generated_file.rename(target_file)
         created_files.append(target_file)
 
+        calpuff_writer(calmet_output, day_token, 1, str(resolved_output_dir), restart=2)
+
+        generated_file = resolved_output_dir / 'calpuff.inp'
+        if not generated_file.exists():
+            raise FileNotFoundError(f'File CALPUFF non generato per {day_token} (restart=2)')
+
+        target_file_nr = resolved_output_dir / f'calpuff_{day_token}.inp_NR'
+        if target_file_nr.exists():
+            target_file_nr.unlink()
+        generated_file.rename(target_file_nr)
+        created_files.append(target_file_nr)
+
         current_date += timedelta(days=1)
 
     return created_files
 
 # Funzione principale per la scrittura del file .inp di CALPUFF
-def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_folder : str) -> str:
+def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_folder : str, restart: int) -> str:
     '''
     Scrive il file di input per CALPUFF a partire dal template e dai parametri di configurazione.
     Args:
@@ -320,10 +337,8 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
         star_wrf = end_wrf
     # Gestione file di restart: se esiste un file di restart per la data di inizio, lo usa
     restart_in = 'RESTARTEMP.DAT' 
-    RESTART = 2
-    if os.path.exists(f'{calpuff_folder}/RESTART_{star_wrf[:8]}.DAT'): 
-        restart_in = f'RESTART_{star_wrf[:8]}.DAT'
-        RESTART = 3
+    restart_in = f'RESTART_{star_wrf[:8]}.DAT'
+    RESTART = restart
     restart_out = f'RESTART_{end_wrf[:8]}.DAT'
     # Estrae anno, mese, giorno, ora da stringa data
     year_s, month_s, day_s, hour_s = extract_date_parts(star_wrf)

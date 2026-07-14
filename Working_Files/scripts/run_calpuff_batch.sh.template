@@ -35,7 +35,19 @@ export LD_LIBRARY_PATH="/home/msantostefano/netcdffort:/home/msantostefano/netcd
 mkdir -p "${CALPUFF_DATA_DIR}"
 
 shopt -s nullglob
-mapfile -t INP_FILES < <(find "${WORKING_FOLDER}" -maxdepth 2 -type f -path "${WORKING_FOLDER}/CALPUFF_INP*/*.inp" | sort)
+mapfile -t INP_FILES < <(
+    find "${WORKING_FOLDER}" -maxdepth 2 -type f -path "${WORKING_FOLDER}/CALPUFF_INP*/*.inp" ! -name "*NR" \
+    | awk -F/ '{
+        file=$NF
+        if (match(file, /([0-9]{8})/, m)) {
+            print m[1] "\t" $0
+        } else {
+            print "99999999\t" $0
+        }
+    }' \
+    | sort -k1,1 -k2,2 \
+    | cut -f2
+)
 
 if [ ${#INP_FILES[@]} -eq 0 ]; then
     echo "ERRORE: nessun file .inp trovato in CALPUFF_INP*"
@@ -63,12 +75,24 @@ for INP_FILE in "${INP_FILES[@]}"; do
     echo "--------------------------------------------------"
     echo "Elaborazione: ${INP_NAME}"
 
-    cp "${INP_FILE}" "${CALPUFF_DIR}/calpuff.inp"
+    
 
     DATE_C=""
     if [[ "${INP_BASENAME}" =~ ([0-9]{8}) ]]; then
         DATE_C="${BASH_REMATCH[1]}"
     fi
+
+    RESTART_IN=""
+    if [ -n "${DATE_C}" ] && [ -f "${CALPUFF_DATA_DIR}/RESTART_${DATE_C}.DAT" ]; then
+        RESTART_IN=""
+    else
+        RESTART_IN="_NR"
+    fi
+
+    cp "${INP_FILE}${RESTART_IN}" "${CALPUFF_DIR}/calpuff.inp"
+
+    echo "File INP copiato: calpuff.inp (sorgente: ${INP_NAME}${RESTART_IN})"
+
 
     CALMET_DAT_SOURCE=""
     if [ -n "${DATE_C}" ] && [ -f "${CALMET_DATA_DIR}/calmet_${DATE_C}.dat" ]; then
