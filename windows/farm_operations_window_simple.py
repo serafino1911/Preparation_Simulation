@@ -1740,6 +1740,51 @@ class FarmOperationsWindow_simple:
                     self.log_message(f"  ✓ makegeo.dat copiato in CALMET")
                 else:
                     self.log_message(f"  ⊙ makegeo.dat non trovato (operazione facoltativa)")
+
+
+            if folder_name == "CALPUFF":
+                default_check_list = ["point_names_location", "area_names_location", "volume_names_location",
+                                    "flare_names_location", "road_names_location", "line_names_location"]
+                temp_config_calpuff = self.temp_dir / "calpuff_config.json"
+                if not temp_config_calpuff.exists():
+                    self.log_message( f"  ⊙ File di configurazione {temp_config_calpuff} non trovato")
+                else:
+                    with open(temp_config_calpuff, "r", encoding="utf-8") as f:
+                        calpuff_config = json.load(f)
+
+                    placeholder_names = {"DUMMY.DAT", "DUMMY.CSV"}
+                    sftp = target_client.open_sftp()
+                    try:
+                        for check_key in default_check_list:
+                            raw_files = calpuff_config.get(check_key)
+                            if not raw_files:
+                                continue
+
+                            file_names = raw_files if isinstance(raw_files, list) else [raw_files]
+                            for file_name in file_names:
+                                if not isinstance(file_name, str) or not file_name.strip():
+                                    self.log_message(f"  ⊙ Valore non valido in {check_key}: {file_name!r}, salto")
+                                    continue
+
+                                normalized_name = file_name.strip()
+                                if normalized_name.upper() in placeholder_names:
+                                    continue
+
+                                local_file = Path(normalized_name)
+                                if not local_file.is_absolute():
+                                    local_file = Path.cwd() / local_file
+
+                                if not local_file.exists():
+                                    self.log_message(f"  ⊙ File {local_file} non trovato (chiave {check_key}), salto")
+                                    continue
+
+                                remote_file = str(PurePosixPath(dest_path) / local_file.name)
+                                sftp.put(str(local_file), remote_file)
+                                self.log_message(f"  → Copia {local_file.name} in CALPUFF (chiave {check_key})...")
+                            self.log_message(f"  ✓ Copia completata per chiave {check_key}")
+                        self.log_message(f"\n✓ {operation_name} completato con successo!")
+                    finally:
+                        sftp.close()
             return True
             
         except Exception as e:
