@@ -20,6 +20,7 @@ class FlareSourcesWindow:
         
         # File FLARE_NAMES (dalla configurazione temporanea)
         self.flare_names = ['DUMMY.CSV']  # Default
+        self.flare_names_location = []  # Percorsi dei file selezionati
         self.load_current_config()
         
         self.setup_ui()
@@ -33,6 +34,7 @@ class FlareSourcesWindow:
                 with open(calpuff_config, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.flare_names = data.get('flare_names', ['DUMMY.CSV'])
+                    self.flare_names_location = data.get('flare_names_location', [])
             except Exception as e:
                 print(f"Errore caricamento configurazione flare: {e}")
     
@@ -49,6 +51,7 @@ class FlareSourcesWindow:
             
             # Aggiorna file flare
             config['flare_names'] = self.flare_names
+            config['flare_names_location'] = self.flare_names_location
             
             # Salva
             with open(calpuff_config, 'w', encoding='utf-8') as f:
@@ -157,6 +160,7 @@ class FlareSourcesWindow:
             if filename:
                 if filename not in self.flare_names:
                     self.flare_names.append(filename)
+                    self.flare_names_location.append(filename)
                     self.refresh_files_list()
                     dialog.destroy()
                 else:
@@ -189,10 +193,12 @@ class FlareSourcesWindow:
         
         if messagebox.askyesno("Conferma", f"Rimuovere il file '{filename}'?"):
             self.flare_names.pop(idx)
+            self.flare_names_location.pop(idx)
             self.refresh_files_list()
     
     def reset_files(self):
         """Reset alla lista default"""
         if messagebox.askyesno("Conferma", "Ripristinare la lista a DUMMY.CSV?"):
             self.flare_names = ['DUMMY.CSV']
+            self.flare_names_location = []
             self.refresh_files_list()

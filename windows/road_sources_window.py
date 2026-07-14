@@ -36,6 +36,7 @@ class RoadSourcesWindow:
         # Sorgenti correnti e file ROAD_NAMES (dalla configurazione temporanea)
         self.current_sources = []
         self.road_names = ['DUMMY.DAT']  # Default
+        self.road_names_location = []  # Percorsi completi dei file ROAD_NAMES
         self.load_current_sources()
         
         self.setup_ui()
@@ -71,6 +72,7 @@ class RoadSourcesWindow:
                     data = json.load(f)
                     self.current_sources = data.get('road_emission', [])
                     self.road_names = data.get('road_names', ['DUMMY.DAT'])
+                    self.road_names_location = data.get('road_names_location', [])
             except Exception as e:
                 print(f"Errore caricamento sorgenti correnti: {e}")
     
@@ -88,6 +90,7 @@ class RoadSourcesWindow:
             # Aggiorna sorgenti e file
             config['road_emission'] = self.current_sources
             config['road_names'] = self.road_names
+            config['road_names_location'] = self.road_names_location
             
             # Salva
             with open(calpuff_config, 'w', encoding='utf-8') as f:
@@ -223,6 +226,7 @@ class RoadSourcesWindow:
             if filename:
                 if filename not in self.road_names:
                     self.road_names.append(filename)
+                    self.road_names_location.append(filename)
                     self.refresh_files_list()
                     dialog.destroy()
                 else:
@@ -252,15 +256,19 @@ class RoadSourcesWindow:
         
         idx = selection[0]
         filename = self.road_names[idx]
+
         
         if messagebox.askyesno("Conferma", f"Rimuovere il file '{filename}'?"):
             self.road_names.pop(idx)
+            self.road_names_location.pop(idx)
+
             self.refresh_files_list()
     
     def reset_files(self):
         """Reset alla lista default"""
         if messagebox.askyesno("Conferma", "Ripristinare la lista a DUMMY.DAT?"):
             self.road_names = ['DUMMY.DAT']
+            self.road_names_location = []
             self.refresh_files_list()
     
     def add_source(self):
@@ -290,6 +298,7 @@ class RoadSourcesWindow:
         
         if messagebox.askyesno("Conferma", f"Eliminare la sorgente '{source_name}'?"):
             self.current_sources.pop(idx)
+            self.road_names_location.pop(idx)
             self.refresh_sources_list()
     
     def save_to_database(self):

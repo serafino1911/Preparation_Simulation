@@ -36,6 +36,7 @@ class LineSourcesWindow:
         # Sorgenti correnti e file LINE_NAMES (dalla configurazione temporanea)
         self.current_sources = []
         self.line_names = ['DUMMY.DAT']  # Default
+        self.line_names_location = []  # Percorsi dei file selezionati
         self.load_current_sources()
         
         self.setup_ui()
@@ -71,6 +72,7 @@ class LineSourcesWindow:
                     data = json.load(f)
                     self.current_sources = data.get('line_emission', [])
                     self.line_names = data.get('line_names', ['DUMMY.DAT'])
+                    self.line_names_location = data.get('line_names_location', [])
             except Exception as e:
                 print(f"Errore caricamento sorgenti correnti: {e}")
     
@@ -88,6 +90,7 @@ class LineSourcesWindow:
             # Aggiorna sorgenti e file
             config['line_emission'] = self.current_sources
             config['line_names'] = self.line_names
+            config['line_names_location'] = self.line_names_location
             
             # Salva
             with open(calpuff_config, 'w', encoding='utf-8') as f:
@@ -223,6 +226,7 @@ class LineSourcesWindow:
             if filename:
                 if filename not in self.line_names:
                     self.line_names.append(filename)
+                    self.line_names_location.append(filename)
                     self.refresh_files_list()
                     dialog.destroy()
                 else:
@@ -255,12 +259,14 @@ class LineSourcesWindow:
         
         if messagebox.askyesno("Conferma", f"Rimuovere il file '{filename}'?"):
             self.line_names.pop(idx)
+            self.line_names_location.pop(idx)
             self.refresh_files_list()
     
     def reset_files(self):
         """Reset alla lista default"""
         if messagebox.askyesno("Conferma", "Ripristinare la lista a DUMMY.DAT?"):
             self.line_names = ['DUMMY.DAT']
+            self.line_names_location = []
             self.refresh_files_list()
     
     def add_source(self):

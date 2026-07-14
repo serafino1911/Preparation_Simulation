@@ -36,6 +36,7 @@ class AreaSourcesWindow:
         # Sorgenti correnti e file AREA_NAMES (dalla configurazione temporanea)
         self.current_sources = []
         self.area_names = ['DUMMY.DAT']  # Default
+        self.area_names_location = []  # Default
         self.load_current_sources()
         
         self.setup_ui()
@@ -71,6 +72,7 @@ class AreaSourcesWindow:
                     data = json.load(f)
                     self.current_sources = data.get('area_emission', [])
                     self.area_names = data.get('area_names', ['DUMMY.DAT'])
+                    self.area_names_location = data.get('area_names_location', [])
             except Exception as e:
                 print(f"Errore caricamento sorgenti correnti: {e}")
     
@@ -88,6 +90,7 @@ class AreaSourcesWindow:
             # Aggiorna sorgenti e file
             config['area_emission'] = self.current_sources
             config['area_names'] = self.area_names
+            config['area_names_location'] = self.area_names_location
             
             # Salva
             with open(calpuff_config, 'w', encoding='utf-8') as f:
@@ -207,10 +210,12 @@ class AreaSourcesWindow:
             # Se la lista contiene solo DUMMY.DAT, sostituiscilo
             if self.area_names == ['DUMMY.DAT']:
                 self.area_names = [file_name]
+                self.area_names_location = [file_path]
             else:
                 # Altrimenti aggiungi se non già presente
                 if file_name not in self.area_names:
                     self.area_names.append(file_name)
+                    self.area_names_location.append(file_path)
             
             self.refresh_files_list()
     
@@ -222,11 +227,13 @@ class AreaSourcesWindow:
             return
         
         index = selection[0]
+        del self.area_names_location[index]  # Rimuovi anche la posizione
         del self.area_names[index]
         
         # Se lista vuota, ripristina DUMMY.DAT
         if not self.area_names:
             self.area_names = ['DUMMY.DAT']
+            self.area_names_location = []
         
         self.refresh_files_list()
     
@@ -234,6 +241,7 @@ class AreaSourcesWindow:
         """Ripristina la lista a DUMMY.DAT"""
         if messagebox.askyesno("Conferma", "Ripristinare la lista a DUMMY.DAT?"):
             self.area_names = ['DUMMY.DAT']
+            self.area_names_location = []
             self.refresh_files_list()
     
     # ===== GESTIONE SORGENTI =====

@@ -38,6 +38,7 @@ class PointSourcesWindow:
         # Sorgenti correnti e POINT_NAMES (dalla configurazione temporanea)
         self.current_sources = {}
         self.point_names = ['DUMMY.DAT']  # Default
+        self.point_names_location = []  # Percorsi completi dei file POINT_NAMES
         self.load_current_sources()
         
         # Origine del dominio (per conversione km -> lat/lon)
@@ -78,6 +79,7 @@ class PointSourcesWindow:
                     self.current_sources = {src['source_name']: src for src in sources_list}
                     # Carica anche POINT_NAMES
                     self.point_names = data.get('point_names', ['DUMMY.DAT'])
+                    self.point_names_location = data.get('point_names_location', [])
             except Exception as e:
                 print(f"Errore caricamento sorgenti puntuali: {e}")
     
@@ -404,10 +406,12 @@ class PointSourcesWindow:
             # Se la lista contiene solo DUMMY.DAT, sostituiscilo
             if self.point_names == ['DUMMY.DAT']:
                 self.point_names = [file_name]
+                self.point_names_location = [file_path]
             else:
                 # Altrimenti aggiungi se non già presente
                 if file_name not in self.point_names:
                     self.point_names.append(file_name)
+                    self.point_names_location.append(file_path)
                 else:
                     messagebox.showinfo("Info", f"Il file '{file_name}' è già nella lista")
                     return
@@ -423,13 +427,16 @@ class PointSourcesWindow:
         
         index = selection[0]
         file_name = self.point_names[index]
+        file_path = self.point_names_location[index]
         
         if messagebox.askyesno("Conferma", f"Rimuovere '{file_name}' dalla lista?"):
             del self.point_names[index]
+            del self.point_names_location[index]
             
             # Se lista vuota, ripristina DUMMY.DAT
             if not self.point_names:
                 self.point_names = ['DUMMY.DAT']
+                self.point_names_location = []
             
             self.refresh_files_list()
     
@@ -437,6 +444,7 @@ class PointSourcesWindow:
         """Ripristina la lista a DUMMY.DAT"""
         if messagebox.askyesno("Conferma", "Ripristinare la lista a DUMMY.DAT?"):
             self.point_names = ['DUMMY.DAT']
+            self.point_names_location = []
             self.refresh_files_list()
     
     def edit_source(self, source_name):
@@ -500,6 +508,7 @@ class PointSourcesWindow:
             
             # Aggiorna anche POINT_NAMES
             config_data['point_names'] = self.point_names
+            config_data['point_names_location'] = self.point_names_location
             
             # Salva
             with open(config_file, 'w', encoding='utf-8') as f:

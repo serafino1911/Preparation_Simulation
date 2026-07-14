@@ -36,6 +36,7 @@ class VolumeSourcesWindow:
         # Sorgenti correnti e file VOLUME_NAMES (dalla configurazione temporanea)
         self.current_sources = {}
         self.volume_names = ['DUMMY.DAT']  # Default
+        self.volume_names_location = []  # Percorsi dei file selezionati
         self.load_current_sources()
         
         # Origine del dominio (per conversione km -> lat/lon)
@@ -77,6 +78,7 @@ class VolumeSourcesWindow:
                     self.current_sources = {src['source_name']: src for src in sources_list}
                     # Carica anche VOLUME_NAMES
                     self.volume_names = data.get('volume_names', ['DUMMY.DAT'])
+                    self.volume_names_location = data.get('volume_names_location', [])
             except Exception as e:
                 print(f"Errore caricamento sorgenti volumetriche: {e}")
     
@@ -333,10 +335,12 @@ class VolumeSourcesWindow:
             # Se la lista contiene solo DUMMY.DAT, sostituiscilo
             if self.volume_names == ['DUMMY.DAT']:
                 self.volume_names = [file_name]
+                self.volume_names_location = [file_path]
             else:
                 # Altrimenti aggiungi se non già presente
                 if file_name not in self.volume_names:
                     self.volume_names.append(file_name)
+                    self.volume_names_location.append(file_path)
                 else:
                     messagebox.showinfo("Info", f"Il file '{file_name}' è già nella lista")
                     return
@@ -355,10 +359,11 @@ class VolumeSourcesWindow:
         
         if messagebox.askyesno("Conferma", f"Rimuovere '{file_name}' dalla lista?"):
             del self.volume_names[index]
-            
+            del self.volume_names_location[index]
             # Se lista vuota, ripristina DUMMY.DAT
             if not self.volume_names:
                 self.volume_names = ['DUMMY.DAT']
+                self.volume_names_location = []
             
             self.refresh_files_list()
     
@@ -366,6 +371,7 @@ class VolumeSourcesWindow:
         """Ripristina la lista a DUMMY.DAT"""
         if messagebox.askyesno("Conferma", "Ripristinare la lista a DUMMY.DAT?"):
             self.volume_names = ['DUMMY.DAT']
+            self.volume_names_location = []
             self.refresh_files_list()
     
     # ===== GESTIONE SORGENTI =====
@@ -491,6 +497,7 @@ class VolumeSourcesWindow:
             
             # Aggiorna anche VOLUME_NAMES
             config_data['volume_names'] = self.volume_names
+            config_data['volume_names_location'] = self.volume_names_location
             
             # Salva
             with open(config_file, 'w', encoding='utf-8') as f:
