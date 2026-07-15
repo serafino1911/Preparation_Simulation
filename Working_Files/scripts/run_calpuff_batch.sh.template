@@ -82,11 +82,15 @@ for INP_FILE in "${INP_FILES[@]}"; do
         DATE_C="${BASH_REMATCH[1]}"
     fi
 
+    echo "Data associata: ${DATE_C:-N/A}, searching for RESTART_${DATE_C}.DAT in ${CALPUFF_DIR}..."
+
     RESTART_IN=""
-    if [ -n "${DATE_C}" ] && [ -f "${CALPUFF_DATA_DIR}/RESTART_${DATE_C}.DAT" ]; then
+    if [ -n "${DATE_C}" ] && [ -f "${CALPUFF_DIR}/RESTART_${DATE_C}.DAT" ]; then
         RESTART_IN=""
+        echo "File RESTART trovato: RESTART_${DATE_C}.DAT"
     else
         RESTART_IN="_NR"
+        echo "File RESTART non trovato, utilizzo INP senza restart (aggiunto suffisso _NR)"
     fi
 
     cp "${INP_FILE}${RESTART_IN}" "${CALPUFF_DIR}/calpuff.inp"
