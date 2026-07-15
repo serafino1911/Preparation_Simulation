@@ -523,7 +523,7 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     # FLARE EMISSION
     file_calpuff = ff.sobstituter(file_calpuff, '[NFL2]', NFL2)   
     NFLDAT = len(FLARE_NAMES)  
-    is_flare_true = NFLDAT > 1 or (NFLDAT == 1 and FLARE_NAMES[0] != 'DUMMY.DAT')  
+    is_flare_true = NFLDAT > 1 or (NFLDAT == 1 and 'DUMMY' not in FLARE_NAMES[0])  
     is_flare = '!' if is_flare_true else '*'  
     NFLDAT = NFLDAT if is_flare_true else 0  
     string_flare_name = ""  
