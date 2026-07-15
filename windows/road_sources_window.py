@@ -210,6 +210,7 @@ class RoadSourcesWindow:
         ttk.Label(frame, text="Nome del file:").grid(row=0, column=0, sticky=tk.W, pady=5)
         
         filename_var = tk.StringVar(value="DUMMY.DAT")
+        selected_path_var = tk.StringVar(value="")
         filename_entry = ttk.Entry(frame, textvariable=filename_var, width=40)
         filename_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
         
@@ -220,13 +221,23 @@ class RoadSourcesWindow:
             )
             if file_path:
                 filename_var.set(Path(file_path).name)
+                selected_path_var.set(file_path)
         
         def add_and_close():
             filename = filename_var.get().strip()
             if filename:
                 if filename not in self.road_names:
+                    selected_path = selected_path_var.get().strip()
+
+                    # Quando viene selezionato un file reale, rimuove automaticamente il placeholder DUMMY.DAT.
+                    if selected_path and 'DUMMY.DAT' in self.road_names:
+                        dummy_idx = self.road_names.index('DUMMY.DAT')
+                        self.road_names.pop(dummy_idx)
+                        if dummy_idx < len(self.road_names_location):
+                            self.road_names_location.pop(dummy_idx)
+
                     self.road_names.append(filename)
-                    self.road_names_location.append(filename)
+                    self.road_names_location.append(selected_path if selected_path else filename)
                     self.refresh_files_list()
                     dialog.destroy()
                 else:
@@ -260,7 +271,8 @@ class RoadSourcesWindow:
         
         if messagebox.askyesno("Conferma", f"Rimuovere il file '{filename}'?"):
             self.road_names.pop(idx)
-            self.road_names_location.pop(idx)
+            if idx < len(self.road_names_location):
+                self.road_names_location.pop(idx)
 
             self.refresh_files_list()
     

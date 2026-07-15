@@ -144,6 +144,7 @@ class FlareSourcesWindow:
         ttk.Label(frame, text="Nome del file:").grid(row=0, column=0, sticky=tk.W, pady=5)
         
         filename_var = tk.StringVar(value="DUMMY.CSV")
+        selected_path_var = tk.StringVar(value="")
         filename_entry = ttk.Entry(frame, textvariable=filename_var, width=40)
         filename_entry.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
         
@@ -154,13 +155,23 @@ class FlareSourcesWindow:
             )
             if file_path:
                 filename_var.set(Path(file_path).name)
+                selected_path_var.set(file_path)
         
         def add_and_close():
             filename = filename_var.get().strip()
             if filename:
                 if filename not in self.flare_names:
+                    selected_path = selected_path_var.get().strip()
+
+                    # Quando viene selezionato un file reale, rimuove automaticamente il placeholder DUMMY.CSV.
+                    if selected_path and 'DUMMY.CSV' in self.flare_names:
+                        dummy_idx = self.flare_names.index('DUMMY.CSV')
+                        self.flare_names.pop(dummy_idx)
+                        if dummy_idx < len(self.flare_names_location):
+                            self.flare_names_location.pop(dummy_idx)
+
                     self.flare_names.append(filename)
-                    self.flare_names_location.append(filename)
+                    self.flare_names_location.append(selected_path if selected_path else filename)
                     self.refresh_files_list()
                     dialog.destroy()
                 else:
@@ -193,7 +204,8 @@ class FlareSourcesWindow:
         
         if messagebox.askyesno("Conferma", f"Rimuovere il file '{filename}'?"):
             self.flare_names.pop(idx)
-            self.flare_names_location.pop(idx)
+            if idx < len(self.flare_names_location):
+                self.flare_names_location.pop(idx)
             self.refresh_files_list()
     
     def reset_files(self):
