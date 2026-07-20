@@ -8,7 +8,43 @@
         },
         "wet_inq": {
             "Liq_Prec": "1.0E-04",
-            "Froz_Prec": "1.0E-04"
+            "Froz_Prec": "3.0E-05"
+        }
+    },
+    "PM2.5": {
+        "dry_deposition": 2,
+        "gas_inq": null,
+        "dry_inq": {
+            "Geo_mass_mean_diam": "1.5",
+            "Geo_std_dev": "1"
+        },
+        "wet_inq": {
+            "Liq_Prec": "1.0E-04",
+            "Froz_Prec": "3.00E-05"
+        }
+    },
+    "PM1": {
+        "dry_deposition": 2,
+        "gas_inq": null,
+        "dry_inq": {
+            "Geo_mass_mean_diam": "0.5",
+            "Geo_std_dev": "0.5"
+        },
+        "wet_inq": {
+            "Liq_Prec": "1.0E-06",
+            "Froz_Prec": "1.0E-06"
+        }
+    },
+    "TSP": {
+        "dry_deposition": 2, 
+        "gas_inq": null, 
+        "dry_inq": {
+            "Geo_mass_mean_diam" : "50",
+            "Geo_std_dev" : "25"
+        }, 
+        "wet_inq": {
+            "Liq_Prec" : "1.00E-04",
+            "Froz_Prec" : "1.00E-04"
         }
     },
     "NOX": {
@@ -24,6 +60,162 @@
         "wet_inq": {
             "Liq_Prec": "3.0E-05",
             "Froz_Prec": "3.0E-05"
+        }
+    },
+    "NO2": {
+        "dry_deposition": 1, 
+        "gas_inq": {
+            "diffus" :".1509",
+            "alfa" : "1.0",
+            "react" : "8.0", 
+            "Mesophyll" : ".0",
+            "Henry_coef" : "4.00E-02"
+        }, 
+        "dry_inq": null, 
+        "wet_inq": {
+            "Liq_Prec" : "0.0E00", 
+            "Froz_Prec" : "1.0E-04"
+        }
+    },
+    "SO2": {
+        "dry_deposition": 1,
+        "gas_inq": {
+            "diffus": ".1509",
+            "alfa": "1.0",
+            "react": "8.0",
+            "Mesophyll": ".0",
+            "Henry_coef": "4.00E-02"
+        },
+        "dry_inq": null,
+        "wet_inq": {
+            "Liq_Prec": "3.0E-05",
+            "Froz_Prec": "0.0E00"
+        }
+    },
+    "VOC": {
+        "dry_deposition": 1, 
+        "gas_inq": {
+            "diffus" :".1345", 
+            "alfa" : "1.0", 
+            "react" : "2.0", 
+            "Mesophyll" : "25.0", 
+            "Henry_coef" : "18.0"
+        }, 
+        "dry_inq": null, 
+        "wet_inq": {
+            "Liq_Prec" : "3.0E-05", 
+            "Froz_Prec" : "0.0E00"
+        }
+    },
+    "CO": {
+        "dry_deposition": 1, 
+        "gas_inq": {
+            "diffus" :".208",
+            "alfa" : "1.0",
+            "react" : "8.0",
+            "Mesophyll" : "5.0",
+            "Henry_coef" : "5.8"
+        }, 
+        "dry_inq": null, 
+        "wet_inq": {
+            "Liq_Prec" : "3.0E-05", 
+            "Froz_Prec" : "0.0E00"
+        }
+    },
+    "HCL": {
+        "dry_deposition": 1, 
+        "gas_inq": {
+            "diffus" :".1345",
+            "alfa" : "1.0", 
+            "react" : "2.0", 
+            "Mesophyll" : "25.0", 
+            "Henry_coef" : "18.0"
+        }, 
+        "dry_inq": null, 
+        "wet_inq": {
+            "Liq_Prec" : "3.0E-05", 
+            "Froz_Prec" : "0.0E00"
+        }
+    },
+    "HF": {
+        "dry_deposition": 1, 
+        "gas_inq": {
+            "diffus" :".1345", 
+            "alfa" : "1.0", 
+            "react" : "2.0", 
+            "Mesophyll" : "25.0", 
+            "Henry_coef" : "18.0"
+        }, 
+        "dry_inq": null, 
+        "wet_inq": {
+            "Liq_Prec" : "3.0E-05", 
+            "Froz_Prec" : "0.0E00"
+        }
+    },
+    "COT": {
+        "dry_deposition": 1, 
+        "gas_inq": {
+            "diffus" :".1345", 
+            "alfa" : "1.0", 
+            "react" : "2.0", 
+            "Mesophyll" : "25.0", 
+            "Henry_coef" : "18.0"
+        }, 
+        "dry_inq": null, 
+        "wet_inq": {
+            "Liq_Prec" : "3.0E-05", 
+            "Froz_Prec" : "0.0E00"
+        }
+    },
+    "MET": {
+        "dry_deposition": 2, 
+        "gas_inq": null, 
+        "dry_inq": {
+            "Geo_mass_mean_diam" : "1.5", 
+            "Geo_std_dev" : "1.0"
+        },
+        "wet_inq": {
+            "Liq_Prec" : "1.00E-04", 
+            "Froz_Prec" : "3.00E-05"
+        }
+    },
+    "NH3": {
+        "dry_deposition": 1,
+        "gas_inq": {
+            "diffus" :".1345", 
+            "alfa" : "1.0", 
+            "react" : "2.0", 
+            "Mesophyll" : "25.0", 
+            "Henry_coef" : "18.0"
+        }, 
+        "dry_inq": null, 
+        "wet_inq": {
+            "Liq_Prec" : "3.0E-05", 
+            "Froz_Prec" : "0.0E00"
+        }
+    },
+    "IPA": {
+        "dry_deposition": 2, 
+        "gas_inq": null, 
+        "dry_inq": {
+            "Geo_mass_mean_diam" : ".5", 
+            "Geo_std_dev" : ".5"
+        }, 
+        "wet_inq": {
+            "Liq_Prec" : "1.00E-06", 
+            "Froz_Prec" : "1.00E-06"
+        }
+    },
+    "PCDDPCDF": {
+        "dry_deposition": 2, 
+        "gas_inq": null, 
+        "dry_inq": {
+            "Geo_mass_mean_diam" : ".5", 
+            "Geo_std_dev" : ".5"
+        }, 
+        "wet_inq": {
+            "Liq_Prec" : "1.00E-06", 
+            "Froz_Prec" : "1.00E-06"
         }
     }
 }
