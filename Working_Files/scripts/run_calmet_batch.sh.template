@@ -103,9 +103,12 @@ for INP_FILE in "${INP_FILES[@]}"; do
     fi
 
     # Pulizia file WRF utilizzati
-    echo "Pulizia file WRF..."
+    echo "Pulizia file WRF e CALMET"
     rm -f "${CALMET_DIR}"/wrf_*.m2d "${CALMET_DIR}"/wrf_*.m3d
+    rm -f "${CALMET_DIR}/${EXPECTED_DAT}"
     echo "✓ File WRF rimossi"
+    
+
 done
 
 echo "=== Batch CALMET completato ==="
