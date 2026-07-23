@@ -46,14 +46,25 @@ class ConfiguratorApp:
         )
         title_label.grid(row=0, column=0, pady=20)
         
-        # Bottone Definisci Dominio
+        # Bottoni Definisci Dominio / Filetti
+        domain_buttons_frame = ttk.Frame(main_frame)
+        domain_buttons_frame.grid(row=1, column=0, pady=10)
+
         define_domain_btn = ttk.Button(
-            main_frame,
+            domain_buttons_frame,
             text="Definisci Dominio",
             command=self.open_domain_window,
-            width=30
+            width=18
         )
-        define_domain_btn.grid(row=1, column=0, pady=10)
+        define_domain_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        filetti_btn = ttk.Button(
+            domain_buttons_frame,
+            text="Filetti",
+            command=self.open_filetti_window,
+            width=10
+        )
+        filetti_btn.pack(side=tk.LEFT)
         
         # Bottone Orografia e Uso Terreno
         orography_btn = ttk.Button(
@@ -165,6 +176,11 @@ class ConfiguratorApp:
         """Apre la finestra per definire il dominio geografico"""
         from windows.domain_window import DomainWindow
         DomainWindow(self.root, self.temp_dir)
+
+    def open_filetti_window(self):
+        """Apre la finestra placeholder per Filetti."""
+        from windows.filetti_window import FilettiWindow
+        FilettiWindow(self.root, self.temp_dir)
     
     def open_orography_window(self):
         """Apre la finestra per orografia e uso terreno"""

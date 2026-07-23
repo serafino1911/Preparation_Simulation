@@ -59,7 +59,6 @@ IVLU = 1
 NVL2 = 0
 NFL2 = 0
 NRD1 = 0
-IRDU = 1
 NRD2 = 0
 NLN2 = 0
 NLINES = 0
@@ -162,7 +161,7 @@ def _normalize_zone(zone_value: str) -> str:
 
 def _apply_runtime_config(calpuff_config: dict, calmet_config: dict, domain_config: dict, landuse_config: dict) -> None:
     global NUM_PERIODS, IOUTU, IPRTU
-    global IPTU, NPT2, IARU, NAR2, IVLU, NVL2, NFL2, NRD1, IRDU, NRD2
+    global IPTU, NPT2, IARU, NAR2, IVLU, NVL2, NFL2, NRD1, NRD2
     global NLN2, NLINES, ILNU, MXNSEG, NLRISE, XL, HBL, WBL, DXL, FPRIMEL, WML
     global TABELLA, SPECIES
     global POINT_NAMES, AREA_NAMES, VOLUME_NAMES, ROAD_NAMES, LINE_NAMES, FLARE_NAMES
@@ -184,7 +183,6 @@ def _apply_runtime_config(calpuff_config: dict, calmet_config: dict, domain_conf
     NVL2 = calpuff_config.get('nvl2', NVL2)
     NFL2 = calpuff_config.get('nfl2', NFL2)
     NRD1 = calpuff_config.get('nrd1', NRD1)
-    IRDU = calpuff_config.get('irdu', IRDU)
     NRD2 = calpuff_config.get('nrd2', NRD2)
     NLN2 = calpuff_config.get('nln2', NLN2)
     NLINES = calpuff_config.get('nlines', NLINES)
@@ -498,8 +496,7 @@ def calpuff_writer(calmet_output, start_date : str, num_days : int, calpuff_fold
     file_calpuff=ff.sobstituter(file_calpuff, '[LINE_SCALE_FACTORS_NAMES]', string_scaling_factors_line)  
 
     #ROAD EMISSION
-    file_calpuff = ff.sobstituter(file_calpuff, '[NRD1]', NRD1)   
-    file_calpuff = ff.sobstituter(file_calpuff, '[IRDU]', IRDU)   
+    file_calpuff = ff.sobstituter(file_calpuff, '[NRD1]', NRD1)     
     NRDDAT = len(ROAD_NAMES)  
     is_road_true = NRDDAT > 1 or (NRDDAT == 1 and ROAD_NAMES[0] != 'DUMMY.DAT')  
     is_road = '!' if is_road_true else '*'  

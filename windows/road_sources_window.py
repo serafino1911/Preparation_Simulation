@@ -534,7 +534,7 @@ class RoadSourceEditor:
         emis_frame.columnconfigure(0, weight=1)
         row += 1
         
-        ttk.Label(emis_frame, text="Inserire i tassi separati da virgola (es: 2.0E-2, 3.0E-2):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        ttk.Label(emis_frame, text="Inserire i tassi in (g/s/m) separati da virgola (es: 2.0E-2, 3.0E-2):").grid(row=0, column=0, sticky=tk.W, pady=5)
         
         self.emis_rates_var = tk.StringVar(value=', '.join(str(x) for x in self.emis_rates))
         ttk.Entry(emis_frame, textvariable=self.emis_rates_var, width=50).grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)

@@ -16,7 +16,7 @@ class CalpuffWindow:
         self.temp_dir = temp_dir
         self.window = tk.Toplevel(parent)
         self.window.title("Configurazione CALPUFF")
-        self.window.geometry("650x750")
+        self.window.geometry("800x750")
         
         # Variabili di configurazione base
         self.num_periods = tk.IntVar(value=24)
@@ -40,7 +40,6 @@ class CalpuffWindow:
         
         # Emissioni stradali
         self.nrd1 = tk.IntVar(value=0)
-        self.irdu = tk.IntVar(value=1)
         self.nrd2 = tk.IntVar(value=0)
         
         # Emissioni linee galleggianti
@@ -58,9 +57,81 @@ class CalpuffWindow:
         
         # Scaling factors
         self.tabella = tk.BooleanVar(value=True)
+
+        # Unita di misura (solo visualizzazione UI)
+        self.units_map = self._load_units_map()
+        self.ioutu_display = tk.StringVar()
+        self.iprtu_display = tk.StringVar()
+        self.iptu_display = tk.StringVar()
+        self.iaru_display = tk.StringVar()
+        self.ivlu_display = tk.StringVar()
+        self.ilnu_display = tk.StringVar()
         
         self.load_existing_config()
+        self._sync_unit_displays_from_codes()
         self.setup_ui()
+
+    def _load_units_map(self):
+        """Carica le definizioni delle unità di misura da un dizionario"""
+        units = {
+            'IOUTU': {'1': 'g/m3 (conc) or g/m2/s (dep)', '2': 'odour (conc)', '3': 'Bq/m3 (conc) or Bq/m2/s (dep)'},
+            'IPRTU': {'1': 'g/m3 (conc) or g/m2/s (dep)', '2': 'mg/m3 (conc) or mg/m2/s (dep)', '3': 'ug/m3 (conc) or ug/m2/s (dep)', '4': 'ng/m3 (conc) or ng/m2/s (dep)', '5': 'odour (conc)', '6': 'TBq/m3 (conc) or TBq/m2/s (dep)', '7': 'GBq/m3 (conc) or GBq/m2/s (dep)', '8': 'Bq/m3 (conc) or Bq/m2/s (dep)'},
+            'IPTU': {'1': 'g/s', '2': 'kg/hr', '3': 'lb/hr', '4': 'tons/yr', '5': 'Odour Unit * m3/s', '6': 'Odour Unit * m3/min', '7': 'metric tons/yr', '8': 'Bq/s', '9': 'GBq/yr'},
+            'IARU': {'1': 'g/m2/s', '2': 'kg/m2/hr', '3': 'lb/m2/hr', '4': 'tons/m2/yr', '5': 'Odour Unit * m/s', '6': 'Odour Unit * m/min', '7': 'metric tons/m2/yr', '8': 'Bq/m2/s', '9': 'GBq/m2/yr'},
+            'IVLU': {'1': 'g/s', '2': 'kg/hr', '3': 'lb/hr', '4': 'tons/yr', '5': 'Odour Unit * m3/s', '6': 'Odour Unit * m3/min', '7': 'metric tons/yr', '8': 'Bq/s', '9': 'GBq/yr'},
+            'ILNU': {'1': 'g/s', '2': 'kg/hr', '3': 'lb/hr', '4': 'tons/yr', '5': 'Odour Unit * m3/s', '6': 'Odour Unit * m3/min', '7': 'metric tons/yr', '8': 'Bq/s', '9': 'GBq/yr'},
+        }
+
+        return units
+
+    def _unit_values(self, key, fallback_codes):
+        """Ritorna i valori testuali del combobox nel formato 'codice - descrizione'."""
+        section = self.units_map.get(key, {})
+        values = []
+
+        for code in fallback_codes:
+            label = section.get(str(code))
+            if label:
+                values.append(f"{code} - {label}")
+            else:
+                values.append(str(code))
+
+        # Aggiunge eventuali codici extra presenti nel JSON ma non nel fallback
+        for code_text, label in sorted(section.items(), key=lambda item: int(item[0])):
+            try:
+                code = int(code_text)
+            except Exception:
+                continue
+            if code not in fallback_codes:
+                values.append(f"{code} - {label}")
+
+        return values
+
+    def _format_unit_display(self, key, code):
+        section = self.units_map.get(key, {})
+        label = section.get(str(code))
+        if label:
+            return f"{code} - {label}"
+        return str(code)
+
+    def _sync_unit_displays_from_codes(self):
+        """Allinea il testo dei combobox ai valori numerici correnti."""
+        self.ioutu_display.set(self._format_unit_display('IOUTU', self.ioutu.get()))
+        self.iprtu_display.set(self._format_unit_display('IPRTU', self.iprtu.get()))
+        self.iptu_display.set(self._format_unit_display('IPTU', self.iptu.get()))
+        self.iaru_display.set(self._format_unit_display('IARU', self.iaru.get()))
+        self.ivlu_display.set(self._format_unit_display('IVLU', self.ivlu.get()))
+        self.ilnu_display.set(self._format_unit_display('ILNU', self.ilnu.get()))
+
+    def _on_unit_selected(self, key, code_var, display_var):
+        """Converte la scelta testuale del combobox nel codice numerico persistente."""
+        selected = display_var.get().strip()
+        code_text = selected.split(' - ', 1)[0].strip()
+        try:
+            code_var.set(int(code_text))
+        except Exception:
+            # Ripristina una visualizzazione coerente se il parsing fallisce
+            display_var.set(self._format_unit_display(key, code_var.get()))
     
     def load_existing_config(self):
         """Carica la configurazione esistente se presente"""
@@ -154,12 +225,26 @@ class CalpuffWindow:
         ttk.Entry(base_frame, textvariable=self.num_periods, width=15).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
         
         ttk.Label(base_frame, text="IOUTU (Unità Output):").grid(row=0, column=2, sticky=tk.W, pady=5)
-        ttk.Combobox(base_frame, textvariable=self.ioutu, 
-                    values=[1, 2, 3], state='readonly', width=13).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ioutu_combo = ttk.Combobox(
+            base_frame,
+            textvariable=self.ioutu_display,
+            values=self._unit_values('IOUTU', [1, 2, 3]),
+            state='readonly',
+            width=30
+        )
+        ioutu_combo.grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ioutu_combo.bind('<<ComboboxSelected>>', lambda _e: self._on_unit_selected('IOUTU', self.ioutu, self.ioutu_display))
         
         ttk.Label(base_frame, text="IPRTU (Altre unità Output):").grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Combobox(base_frame, textvariable=self.iprtu, 
-                    values=[0, 1, 2, 3, 4], state='readonly', width=13).grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
+        iprtu_combo = ttk.Combobox(
+            base_frame,
+            textvariable=self.iprtu_display,
+            values=self._unit_values('IPRTU', [1, 2, 3, 4, 5, 6, 7, 8]),
+            state='readonly',
+            width=30
+        )
+        iprtu_combo.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 15))
+        iprtu_combo.bind('<<ComboboxSelected>>', lambda _e: self._on_unit_selected('IPRTU', self.iprtu, self.iprtu_display))
         
         # === SEZIONE SPECIES ===
         species_frame = ttk.LabelFrame(scrollable_frame, text="Configurazione Species", padding="10")
@@ -181,8 +266,15 @@ class CalpuffWindow:
         row += 1
         
         ttk.Label(point_frame, text="IPTU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
-        ttk.Combobox(point_frame, textvariable=self.iptu, values=[1,2,3,4,5,6,7,8,9], 
-                    state='readonly', width=8).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        iptu_combo = ttk.Combobox(
+            point_frame,
+            textvariable=self.iptu_display,
+            values=self._unit_values('IPTU', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            state='readonly',
+            width=25
+        )
+        iptu_combo.grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        iptu_combo.bind('<<ComboboxSelected>>', lambda _e: self._on_unit_selected('IPTU', self.iptu, self.iptu_display))
         
         ttk.Label(point_frame, text="NPT2 (File Ext):").grid(row=0, column=4, sticky=tk.W, pady=5, padx=(10, 0))
         ttk.Entry(point_frame, textvariable=self.npt2, width=10).grid(row=0, column=5, sticky=(tk.W, tk.E), pady=5, padx=5)
@@ -199,8 +291,15 @@ class CalpuffWindow:
         row += 1
         
         ttk.Label(area_frame, text="IARU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
-        ttk.Combobox(area_frame, textvariable=self.iaru, values=[1,2,3,4,5,6,7,8,9], 
-                    state='readonly', width=8).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        iaru_combo = ttk.Combobox(
+            area_frame,
+            textvariable=self.iaru_display,
+            values=self._unit_values('IARU', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            state='readonly',
+            width=25
+        )
+        iaru_combo.grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        iaru_combo.bind('<<ComboboxSelected>>', lambda _e: self._on_unit_selected('IARU', self.iaru, self.iaru_display))
         
         ttk.Label(area_frame, text="NAR2 (File Ext):").grid(row=0, column=4, sticky=tk.W, pady=5, padx=(10, 0))
         ttk.Entry(area_frame, textvariable=self.nar2, width=10).grid(row=0, column=5, sticky=(tk.W, tk.E), pady=5, padx=5)
@@ -217,8 +316,15 @@ class CalpuffWindow:
         row += 1
         
         ttk.Label(volume_frame, text="IVLU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
-        ttk.Combobox(volume_frame, textvariable=self.ivlu, values=[1,2,3,4,5,6,7,8,9], 
-                    state='readonly', width=8).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        ivlu_combo = ttk.Combobox(
+            volume_frame,
+            textvariable=self.ivlu_display,
+            values=self._unit_values('IVLU', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            state='readonly',
+            width=25
+        )
+        ivlu_combo.grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
+        ivlu_combo.bind('<<ComboboxSelected>>', lambda _e: self._on_unit_selected('IVLU', self.ivlu, self.ivlu_display))
         
         ttk.Label(volume_frame, text="NVL2 (File Ext):").grid(row=0, column=4, sticky=tk.W, pady=5, padx=(10, 0))
         ttk.Entry(volume_frame, textvariable=self.nvl2, width=10).grid(row=0, column=5, sticky=(tk.W, tk.E), pady=5, padx=5)
@@ -249,11 +355,8 @@ class CalpuffWindow:
         ttk.Label(road_frame, text="NRD1:").grid(row=0, column=0, sticky=tk.W, pady=5)
         ttk.Entry(road_frame, textvariable=self.nrd1, width=10).grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
         
-        ttk.Label(road_frame, text="IRDU:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
-        ttk.Combobox(road_frame, textvariable=self.irdu, values=[1,2,3,4,5,6,7,8,9], 
-                    state='readonly', width=8).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
         
-        ttk.Label(road_frame, text="NRD2 (File Ext):").grid(row=0, column=4, sticky=tk.W, pady=5, padx=(10, 0))
+        ttk.Label(road_frame, text="NRD2 (File Ext):").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(10, 0))
         ttk.Entry(road_frame, textvariable=self.nrd2, width=10).grid(row=0, column=5, sticky=(tk.W, tk.E), pady=5, padx=5)
         
         ttk.Button(road_frame, text="⚙️ Configura Sorgenti Stradali", 
@@ -274,8 +377,15 @@ class CalpuffWindow:
         ttk.Entry(line_frame, textvariable=self.nlines, width=10).grid(row=0, column=3, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
         
         ttk.Label(line_frame, text="ILNU:").grid(row=0, column=4, sticky=tk.W, pady=5, padx=(10, 0))
-        ttk.Combobox(line_frame, textvariable=self.ilnu, values=[1,2,3,4,5,6,7,8,9], 
-                    state='readonly', width=8).grid(row=0, column=5, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ilnu_combo = ttk.Combobox(
+            line_frame,
+            textvariable=self.ilnu_display,
+            values=self._unit_values('ILNU', [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            state='readonly',
+            width=25
+        )
+        ilnu_combo.grid(row=0, column=5, sticky=(tk.W, tk.E), pady=5, padx=5)
+        ilnu_combo.bind('<<ComboboxSelected>>', lambda _e: self._on_unit_selected('ILNU', self.ilnu, self.ilnu_display))
         
         ttk.Label(line_frame, text="MXNSEG:").grid(row=1, column=0, sticky=tk.W, pady=5)
         ttk.Entry(line_frame, textvariable=self.mxnseg, width=10).grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 10))
@@ -444,7 +554,6 @@ class CalpuffWindow:
             'nvl2': self.nvl2.get(),
             'nfl2': self.nfl2.get(),
             'nrd1': self.nrd1.get(),
-            'irdu': self.irdu.get(),
             'nrd2': self.nrd2.get(),
             'nln2': self.nln2.get(),
             'nlines': self.nlines.get(),
