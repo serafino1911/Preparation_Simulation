@@ -11,6 +11,7 @@ import os
 import re
 import stat
 import shlex
+from datetime import datetime
 from service.ctgproc_inp_writer import generate_ctgproc_inp
 from service.makegeo_inp_writer import generate_makegeo_inp
 from service.terrel_inp_writer import generate_terrel_inp
@@ -403,6 +404,14 @@ class FarmOperationsWindow:
             command=self.check_bjobs,
             width=button_width
         ).grid(row=6, column=2, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
+
+        # RIGA 7
+        ttk.Button(
+            operations_frame,
+            text="🗺️ Remote KML",
+            command=self.open_kml_remote_window,
+            width=button_width
+        ).grid(row=7, column=0, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
 
         # === AREA OUTPUT/LOG ===
         log_frame = ttk.LabelFrame(main_frame, text="📄 Output Operation Log", padding="10")
@@ -1729,6 +1738,262 @@ class FarmOperationsWindow:
         self.log_message("Operazione: Launch Meteo")
         self.log_message("Apertura finestra configurazione Meteo...")
         MeteoWindow(self.window, self.temp_dir, farm_controller=self)
+
+    def open_kml_remote_window(self):
+        """Apre la finestra di configurazione KML remoto."""
+        try:
+            from windows.kml_remote_window import KMLRemoteWindow
+        except Exception as import_error:
+            messagebox.showerror(
+                "Errore",
+                "Impossibile aprire la finestra KML remoto.\n\n"
+                f"Dettagli: {import_error}"
+            )
+            return
+
+        self.log_message("\n" + "="*50)
+        self.log_message("Operazione: Remote KML")
+        self.log_message("Apertura finestra configurazione KML remota...")
+        KMLRemoteWindow(self.window, self.temp_dir, start_callback=self.launch_remote_kml)
+
+    def launch_remote_kml(self):
+        """Avvia la generazione KML remota usando la configurazione salvata."""
+        if not PARAMIKO_AVAILABLE:
+            messagebox.showerror(
+                "Errore",
+                "Il modulo 'paramiko' non è installato.\n\n"
+                "Installa con: pip install paramiko"
+            )
+            return
+
+        if not self.farm_config:
+            messagebox.showerror(
+                "Errore",
+                "Nessuna configurazione farm trovata.\n\n"
+                "Configura prima il Farm dalla finestra 'Configurazione Farm'."
+            )
+            return
+
+        if not self.jump_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Jump Server!")
+            return
+
+        if not self.same_credentials.get() and not self.target_password.get():
+            messagebox.showerror("Errore", "Inserisci la password per il Target Server!")
+            return
+
+        kml_config = self._read_json_file_safe(self.temp_dir / "kml_config.json")
+        if not kml_config:
+            messagebox.showerror(
+                "Errore",
+                "Configurazione KML remota mancante.\n\n"
+                "Apri prima la finestra 'Remote KML' e salva i parametri."
+            )
+            return
+
+        source_folders = kml_config.get('source_folders', [])
+        if not isinstance(source_folders, list) or not any(str(item).strip() for item in source_folders):
+            messagebox.showerror("Errore", "Seleziona almeno una cartella sorgente per il KML remoto.")
+            return
+
+        self.log_message("\n" + "="*50)
+        self.log_message("Operazione: Launch Remote KML")
+        self.log_message(f"Job: {kml_config.get('job_name', 'kml_job')}")
+        self.log_message(f"Cartelle sorgenti configurate: {len(source_folders)}")
+
+        thread = threading.Thread(target=self._launch_remote_kml_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _sanitize_remote_name(self, value, fallback='item'):
+        """Normalizza un nome da usare in path remoti."""
+        cleaned = re.sub(r'[^A-Za-z0-9._-]+', '_', str(value or '').strip())
+        cleaned = cleaned.strip('._')
+        return cleaned or fallback
+
+    def _resolve_remote_path(self, path_value, working_folder):
+        """Risolve un percorso remoto assoluto a partire dalla working folder del farm."""
+        work_folder = str(working_folder or '').rstrip('/')
+        if not work_folder:
+            raise ValueError("Working folder del farm non configurata")
+
+        candidate = str(path_value or '').strip().replace('\\', '/')
+        if not candidate:
+            return work_folder
+
+        posix_candidate = PurePosixPath(candidate)
+        if posix_candidate.is_absolute():
+            return str(posix_candidate)
+        return str(PurePosixPath(work_folder) / posix_candidate)
+
+    def _launch_remote_kml_thread(self):
+        """Thread per creare ed eseguire il payload KML sul farm."""
+        jump_client = None
+        target_client = None
+        sftp = None
+        try:
+            jump_host = self.farm_config.get('ssh_host', '')
+            jump_port = int(self.farm_config.get('ssh_port', 22))
+            jump_username = self.farm_config.get('ssh_username', '')
+            jump_password = self.jump_password.get()
+
+            self.log_message("Connessione in corso...")
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                hostname=jump_host,
+                port=jump_port,
+                username=jump_username,
+                password=jump_password
+            )
+
+            target_host = self.farm_config.get('target_host', '')
+            target_username = self.farm_config.get('target_username', jump_username)
+            target_password = self.target_password.get() if not self.same_credentials.get() else jump_password
+            working_folder = self.farm_config.get('working_folder', '/project/pmten/simulations/')
+            work_folder = working_folder.rstrip('/')
+
+            jump_transport = jump_client.get_transport()
+            dest_addr = (target_host, 22)
+            local_addr = (jump_host, jump_port)
+            jump_channel = jump_transport.open_channel("direct-tcpip", dest_addr, local_addr)
+
+            target_client = paramiko.SSHClient()
+            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            target_client.connect(
+                hostname=target_host,
+                username=target_username,
+                password=target_password,
+                sock=jump_channel
+            )
+
+            self.log_message("✓ Connesso al farm")
+
+            kml_config = self._read_json_file_safe(self.temp_dir / "kml_config.json")
+            job_name = self._sanitize_remote_name(kml_config.get('job_name'), 'kml_job')
+            payload_root = self._resolve_remote_path(
+                kml_config.get('remote_payload_root', 'KML_REMOTE'),
+                work_folder,
+            )
+            output_dir = self._resolve_remote_path(
+                kml_config.get('remote_output_dir', 'KML_OUTPUT'),
+                work_folder,
+            )
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            remote_job_dir = str(PurePosixPath(payload_root) / f"{job_name}_{timestamp}")
+            remote_config_dir = str(PurePosixPath(remote_job_dir) / "configurations")
+            remote_script_path = str(PurePosixPath(remote_job_dir) / "run_remote_kml.py")
+            remote_config_path = str(PurePosixPath(remote_job_dir) / "kml_config.json")
+            remote_main_path = str(PurePosixPath(remote_job_dir) / "main.py")
+            remote_scale_path = str(PurePosixPath(remote_config_dir) / "scale_new_new_color.txt")
+            bsub_out = str(PurePosixPath(remote_job_dir) / 'kml_output.log')
+            bsub_err = str(PurePosixPath(remote_job_dir) / 'kml_error.log')
+
+            local_root = Path(__file__).resolve().parent.parent
+            local_main_path = local_root / 'KML' / 'main.py'
+            local_scale_path = local_root / 'KML' / 'configurations' / 'scale_new_new_color.txt'
+
+            if not local_main_path.exists():
+                raise FileNotFoundError(f"File KML mancante: {local_main_path}")
+            if not local_scale_path.exists():
+                raise FileNotFoundError(f"File configurazione KML mancante: {local_scale_path}")
+
+            remote_config = dict(kml_config)
+            remote_config['working_folder'] = work_folder
+            remote_config['base'] = output_dir if str(kml_config.get('remote_output_dir', '')).strip() else None
+            remote_config['remote_job_dir'] = remote_job_dir
+
+            self.log_message(f"Cartella payload remoto: {remote_job_dir}")
+            self.log_message(f"Cartella output KML: {output_dir}")
+            self.log_message("Preparazione cartelle remote...")
+
+            mkdir_command = (
+                f"mkdir -p {shlex.quote(payload_root)} "
+                f"{shlex.quote(remote_job_dir)} "
+                f"{shlex.quote(remote_config_dir)} "
+                f"{shlex.quote(output_dir)}"
+            )
+            stdin, stdout, stderr = target_client.exec_command(mkdir_command)
+            mkdir_error = stderr.read().decode().strip()
+            mkdir_status = stdout.channel.recv_exit_status()
+            if mkdir_status != 0:
+                raise RuntimeError(mkdir_error or f"Impossibile creare le cartelle remote (exit code {mkdir_status})")
+
+            runner_script = self._render_script_template(
+                "python/run_remote_kml.py.template",
+                {
+                    "TPL_CONFIG_FILENAME_LITERAL": json.dumps("kml_config.json"),
+                },
+            )
+
+            self.log_message("Upload script e risorse KML...")
+            sftp = target_client.open_sftp()
+            sftp.put(str(local_main_path), remote_main_path)
+            sftp.put(str(local_scale_path), remote_scale_path)
+            with sftp.open(remote_script_path, 'w') as remote_script_file:
+                remote_script_file.write(runner_script)
+            with sftp.open(remote_config_path, 'w') as remote_config_file:
+                remote_config_file.write(json.dumps(remote_config, indent=2, ensure_ascii=False))
+
+            target_client.exec_command(f"chmod +x {shlex.quote(remote_script_path)}")
+            target_client.exec_command(
+                f"rm -f {shlex.quote(bsub_out)} {shlex.quote(bsub_err)}"
+            )
+
+            self.log_message("Sottomissione job KML con bsub -q pmten...")
+            bsub_command = (
+                f"cd {shlex.quote(remote_job_dir)}; "
+                f"bsub -q pmten -o {shlex.quote(bsub_out)} -e {shlex.quote(bsub_err)} "
+                f"python3 {shlex.quote(remote_script_path)} {shlex.quote(remote_config_path)}"
+            )
+            stdin, stdout, stderr = target_client.exec_command(bsub_command)
+            output = stdout.read().decode().strip()
+            error = stderr.read().decode().strip()
+            exit_status = stdout.channel.recv_exit_status()
+
+            if output:
+                self.log_message(f"Output bsub KML:\n{output}")
+            if error:
+                self.log_message(f"Stderr bsub KML:\n{error}")
+
+            if exit_status != 0:
+                raise RuntimeError(error or f"Sottomissione KML fallita con exit code {exit_status}")
+
+            self.log_message("\n✓ Job KML sottomesso con successo!")
+            self.log_message(f"Payload remoto: {remote_job_dir}")
+            self.log_message(f"Output KML: {output_dir}")
+            self.log_message(f"Log output: {bsub_out}")
+            self.log_message(f"Log errori: {bsub_err}")
+
+            messagebox.showinfo(
+                "Successo",
+                "Job KML sottomesso con successo!\n\n"
+                f"Payload remoto: {remote_job_dir}\n"
+                f"Output KML: {output_dir}\n"
+                f"Log output: {bsub_out}\n"
+                f"Log errori: {bsub_err}"
+            )
+
+        except Exception as e:
+            self.log_message(f"\n✗ ERRORE: {str(e)}")
+            messagebox.showerror("Errore", f"Errore durante Launch Remote KML:\n\n{str(e)}")
+        finally:
+            try:
+                if sftp:
+                    sftp.close()
+            except Exception:
+                pass
+            try:
+                if target_client:
+                    target_client.close()
+            except Exception:
+                pass
+            try:
+                if jump_client:
+                    jump_client.close()
+            except Exception:
+                pass
     
     def launch_puntuale(self):
         """Configura ed estrae serie temporali puntuali dai CSV aggregati sul farm"""

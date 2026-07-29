@@ -1,0 +1,181 @@
+import json
+import os
+import sys
+from pathlib import Path
+
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+payload_dir = Path(__file__).resolve().parent
+os.chdir(payload_dir)
+sys.path.insert(0, str(payload_dir))
+
+from main import from_csv_to_kml_configurated
+
+DEFAULT_CONFIG_NAME = ${TPL_CONFIG_FILENAME_LITERAL}
+
+
+def resolve_remote_path(path_value, working_folder):
+    candidate = Path(str(path_value).strip())
+    if candidate.is_absolute():
+        return candidate
+    return working_folder / candidate
+
+
+def infer_variable_name(csv_path, source_root, configured_variable):
+    configured = str(configured_variable or '').strip()
+    if configured:
+        return configured
+
+    try:
+        relative_parts = csv_path.relative_to(source_root).parts
+    except Exception:
+        relative_parts = csv_path.parts
+
+    if len(relative_parts) >= 2:
+        return str(relative_parts[0]).strip()
+
+    raise ValueError(
+        "Impossibile inferire la variabile da " + str(csv_path) +
+        ": il file deve trovarsi almeno in una sottocartella della cartella sorgente"
+    )
+
+
+def build_configuration_tuple(config, variable_name):
+    return [
+        int(config.get('levels', 400)),
+        variable_name,
+        str(config.get('zone', '32')),
+        config.get('projin', 'utm'),
+        config.get('projout', 'WGS84'),
+        bool(config.get('static', False)),
+        float(config.get('max_scale', 130)),
+        float(config.get('min_scale', 0)),
+        config.get('x_col', 'x_km'),
+        config.get('y_col', 'y_km'),
+        config.get('val_col', 'value'),
+        float(config.get('scale', 1.0)),
+        config.get('base'),
+        float(config.get('x_shift', 0.0)),
+        float(config.get('y_shift', 0.0)),
+        float(config.get('x_scale_factor', 1.0)),
+        float(config.get('y_scale_factor', 1.0)),
+    ]
+
+
+def resolve_output_dir(csv_path, source_root, working_folder, base_output_dir):
+    if base_output_dir is None:
+        return csv_path.parent
+
+    try:
+        relative_parent = csv_path.parent.relative_to(working_folder)
+        return base_output_dir / relative_parent
+    except Exception:
+        pass
+
+    try:
+        relative_parent = csv_path.parent.relative_to(source_root)
+        return base_output_dir / source_root.name / relative_parent
+    except Exception:
+        return base_output_dir / source_root.name
+
+
+def collect_csv_files(source_roots):
+    collected = []
+    seen = set()
+    missing_roots = []
+
+    for source_root in source_roots:
+        if not source_root.is_dir():
+            missing_roots.append(str(source_root))
+            continue
+
+        for csv_path in sorted(source_root.rglob('*.csv')):
+            normalized = str(csv_path.resolve()) if csv_path.exists() else str(csv_path)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            collected.append((source_root, csv_path))
+
+    return collected, missing_roots
+
+
+def main():
+    config_path = Path(sys.argv[1]) if len(sys.argv) > 1 else payload_dir / DEFAULT_CONFIG_NAME
+    if not config_path.is_absolute():
+        config_path = payload_dir / config_path
+    if not config_path.exists():
+        print(f"ERRORE: configurazione non trovata: {config_path}", file=sys.stderr)
+        raise SystemExit(10)
+
+    with config_path.open('r', encoding='utf-8') as handle:
+        config = json.load(handle)
+
+    working_folder = Path(str(config.get('working_folder', payload_dir)).strip() or payload_dir)
+    if not working_folder.is_absolute():
+        working_folder = (payload_dir / working_folder).resolve()
+
+    base_output = config.get('base')
+    output_dir = None
+    if str(base_output or '').strip():
+        output_dir = resolve_remote_path(base_output, working_folder)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        config['base'] = str(output_dir)
+    else:
+        config['base'] = None
+
+    source_folder_values = [str(item).strip() for item in config.get('source_folders', []) if str(item).strip()]
+    if not source_folder_values:
+        print("ERRORE: nessuna cartella sorgente configurata", file=sys.stderr)
+        raise SystemExit(11)
+
+    source_roots = [resolve_remote_path(item, working_folder) for item in source_folder_values]
+    csv_files, missing_roots = collect_csv_files(source_roots)
+    if not csv_files:
+        print("ERRORE: nessun file CSV trovato nelle cartelle sorgenti configurate", file=sys.stderr)
+        raise SystemExit(12)
+
+    processed = []
+    failed = []
+
+    for source_root, csv_path in csv_files:
+        try:
+            variable_name = infer_variable_name(csv_path, source_root, config.get('variable', ''))
+            configuration = build_configuration_tuple(config, variable_name)
+            target_dir = resolve_output_dir(csv_path, source_root, working_folder, output_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            kml_file_path = target_dir / (csv_path.stem.lower() + '.kml')
+            from_csv_to_kml_configurated(str(csv_path), configuration, kml_file_name=str(kml_file_path))
+            processed.append({
+                'source_root': str(source_root),
+                'csv': str(csv_path),
+                'variable': variable_name,
+                'kml': str(kml_file_path),
+            })
+        except Exception as exc:
+            failed.append({
+                'source_root': str(source_root),
+                'csv': str(csv_path),
+                'error': str(exc),
+            })
+
+    summary = {
+        'job_name': config.get('job_name', 'kml_job'),
+        'working_folder': str(working_folder),
+        'output_dir': str(output_dir) if output_dir is not None else None,
+        'source_folders': [str(path) for path in source_roots],
+        'processed_count': len(processed),
+        'missing_source_folders_count': len(missing_roots),
+        'failed_count': len(failed),
+        'processed': processed,
+        'missing_source_folders': missing_roots,
+        'failed': failed,
+    }
+
+    print(json.dumps(summary, ensure_ascii=False))
+
+    if not processed:
+        raise SystemExit(20)
+
+
+if __name__ == '__main__':
+    main()
