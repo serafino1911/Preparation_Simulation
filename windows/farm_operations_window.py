@@ -1942,10 +1942,15 @@ class FarmOperationsWindow:
             )
 
             self.log_message("Sottomissione job KML con bsub -q pmten...")
+            remote_activate_path = f"{work_folder}/.venv/bin/activate"
+            remote_launch_command = (
+                f". {shlex.quote(remote_activate_path)}; "
+                f"python3 {shlex.quote(remote_script_path)} {shlex.quote(remote_config_path)}"
+            )
             bsub_command = (
                 f"cd {shlex.quote(remote_job_dir)}; "
                 f"bsub -q pmten -o {shlex.quote(bsub_out)} -e {shlex.quote(bsub_err)} "
-                f"python3 {shlex.quote(remote_script_path)} {shlex.quote(remote_config_path)}"
+                f"{shlex.quote(remote_launch_command)}"
             )
             stdin, stdout, stderr = target_client.exec_command(bsub_command)
             output = stdout.read().decode().strip()
