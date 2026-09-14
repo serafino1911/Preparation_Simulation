@@ -89,7 +89,9 @@ def collect_csv_files(source_roots):
             missing_roots.append(str(source_root))
             continue
 
-        file_list = sorted(source_root.rglob('*.csv')) + sorted(source_root.rglob('*.CSV'))
+        file_list = sorted(
+            path for path in source_root.rglob('*')
+            if path.is_file() and path.suffix.lower() == '.csv')       
 
         for csv_path in file_list:
             normalized = str(csv_path.resolve()) if csv_path.exists() else str(csv_path)
