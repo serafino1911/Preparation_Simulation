@@ -563,10 +563,10 @@ class OrographyWindow:
                     points_found += 1  # Incrementa il contatore
                     output_x, output_y = (transformer.transform(x, y) if transformer else (x, y))
                     if z != -32768:  # Valore valido
-                        f_out1.write(f'{x:14.2f}{y:15.2f}\n')
+                        f_out1.write(f'{output_x:14.2f}{output_y:15.2f}\n')
                         f_out2.write(f'{output_x:14.2f}{output_y:15.2f}{int(z):10d}\n')
                     else:  # Valore nullo
-                        f_out1.write(f'{x:14.2f}{y:15.2f}\n')
+                        f_out1.write(f'{output_x:14.2f}{output_y:15.2f}\n')
                         f_out2.write(f'{output_x:14.2f}{output_y:15.2f}{null:10d}\n')
                 
                 # Aggiorna i valori estremi delle coordinate
@@ -772,7 +772,7 @@ class OrographyWindow:
             
             # Estrae il numero di zona da zona_utm (es. '32N' -> 32)
             zone_number = int(''.join(filter(str.isdigit, zona_utm)))
-            
+            use_latlon = False
             if use_latlon:
                 # Le coordinate nel grid sono già lat-lon (WGS84)
                 crs_grid = pyproj.CRS({
@@ -800,7 +800,7 @@ class OrographyWindow:
             
             # Crea i transformers
             transformer_to_raster = pyproj.Transformer.from_crs(crs_grid, crs_raster, always_xy=True)
-            transformer_to_wgs84 = pyproj.Transformer.from_crs(crs_raster, crs_wgs84, always_xy=True)
+            transformer_to_wgs84 = pyproj.Transformer.from_crs(crs_grid, crs_wgs84, always_xy=True)
             
             # Trasforma i punti dal CRS del grid al CRS del raster
             rast_x, rast_y = transformer_to_raster.transform(grid_x, grid_y)
@@ -816,22 +816,15 @@ class OrographyWindow:
                 
                 cols = np.floor((rast_x - c) / a).astype(int)
                 rows = np.floor((f - rast_y) / abs(e)).astype(int)
-                x_center = c + (cols + 0.5) * a
-                y_center = f + (rows + 0.5) * e
             else:
                 # Fallback per raster ruotati
-                rows, cols, x_center, y_center = [], [], [], []
+                rows, cols = [], []
                 for x, y in zip(rast_x, rast_y):
                     row, col = src.index(x, y)
                     rows.append(row)
                     cols.append(col)
-                    xc, yc = src.xy(row, col)
-                    x_center.append(xc)
-                    y_center.append(yc)
                 rows = np.array(rows)
                 cols = np.array(cols)
-                x_center = np.array(x_center)
-                y_center = np.array(y_center)
             
             if progress_window:
                 progress_window.update_progress(70, "Estrazione valori raster...")
@@ -857,16 +850,18 @@ class OrographyWindow:
             if progress_window:
                 progress_window.update_progress(85, "Trasformazione a WGS84...")
             
-            # Trasforma i centri dei pixel a WGS84
-            longs, lats = transformer_to_wgs84.transform(x_center, y_center)
-            longs = np.round(longs, 8)
-            lats = np.round(lats, 9)
-            
+            # Mantiene la posizione originale della griglia, non il centro del pixel.
+            if use_latlon:
+                longs, lats = grid_x, grid_y
+            else:
+                longs, lats = transformer_to_wgs84.transform(grid_x, grid_y)
+
+           
             if progress_window:
                 progress_window.update_progress(95, "Salvataggio output...")
             
             # Prepara e salva l'output
             out_arr = np.column_stack((longs, lats, mapped_values))
-            np.savetxt(output_file, out_arr, fmt='%.8f\t%.9f\t%d', delimiter='\t')
+            np.savetxt(output_file, out_arr, fmt='%.12f\t%.12f\t%d', delimiter='\t')
         
         print(f"Uso terreno creato: {len(points)} punti processati")
