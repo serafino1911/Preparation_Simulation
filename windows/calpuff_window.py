@@ -163,7 +163,6 @@ class CalpuffWindow:
                 
                 # Road emissions
                 self.nrd1.set(data.get('nrd1', 0))
-                self.irdu.set(data.get('irdu', 1))
                 self.nrd2.set(data.get('nrd2', 0))
                 
                 # Line emissions
