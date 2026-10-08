@@ -8,13 +8,19 @@ from pathlib import Path
 import json
 import numpy as np
 import threading
+import re
 
 try:
     import rasterio
-    import pyproj
     RASTERIO_AVAILABLE = True
 except ImportError:
     RASTERIO_AVAILABLE = False
+
+try:
+    import pyproj
+    PYPROJ_AVAILABLE = True
+except ImportError:
+    PYPROJ_AVAILABLE = False
 
 
 class ProgressWindow:
@@ -410,6 +416,7 @@ class OrographyWindow:
                     'zona_utm': domain_config.get('zona_utm', 'N/A'),
                     'use_latlon': use_latlon,  # Salva se sono state usate coordinate lat-lon
                     'coordinate_type': 'lat-lon' if use_latlon else 'UTM',
+                    'oro_coordinate_type': 'UTM',
                     'zona_utm': zone_utm
                 }
                 
@@ -512,6 +519,29 @@ class OrographyWindow:
         last_progress = 20
 
         zona = ''.join(ch for ch in str(zone_utm) if ch.isdigit()) if zone_utm and any(ch.isdigit() for ch in str(zone_utm)) else '32'
+        transformer = None
+        if use_latlon:
+            if not PYPROJ_AVAILABLE:
+                raise ValueError("La conversione delle coordinate lat-lon in UTM richiede pyproj.")
+
+            zone_match = re.fullmatch(r'\s*(\d{1,2})\s*([NS])\s*', str(zone_utm or '').upper())
+            if not zone_match:
+                raise ValueError(f"Zona UTM non valida per la conversione: {zone_utm}")
+
+            zone_number = int(zone_match.group(1))
+            if not 1 <= zone_number <= 60:
+                raise ValueError(f"Zona UTM non valida per la conversione: {zone_utm}")
+
+            hemisphere = zone_match.group(2)
+            epsg_code = (32600 if hemisphere == 'N' else 32700) + zone_number
+            try:
+                transformer = pyproj.Transformer.from_crs(
+                    "EPSG:4326",
+                    f"EPSG:{epsg_code}",
+                    always_xy=True,
+                )
+            except Exception as error:
+                raise ValueError(f"Impossibile creare la trasformazione verso UTM {zone_utm}: {error}") from error
         
         with open(input_file, 'r') as f_in, \
              open(output_grid, 'w') as f_out1, \
@@ -531,12 +561,13 @@ class OrographyWindow:
                 # Considera solo i punti all'interno dei bordi specificati
                 if y_border[0] <= y <= y_border[1] and x_border[0] <= x <= x_border[1]:
                     points_found += 1  # Incrementa il contatore
+                    output_x, output_y = (transformer.transform(x, y) if transformer else (x, y))
                     if z != -32768:  # Valore valido
                         f_out1.write(f'{x:14.2f}{y:15.2f}\n')
-                        f_out2.write(f'{x:14.2f}{y:15.2f}{int(z):10d}\n')
+                        f_out2.write(f'{output_x:14.2f}{output_y:15.2f}{int(z):10d}\n')
                     else:  # Valore nullo
                         f_out1.write(f'{x:14.2f}{y:15.2f}\n')
-                        f_out2.write(f'{x:14.2f}{y:15.2f}{null:10d}\n')
+                        f_out2.write(f'{output_x:14.2f}{output_y:15.2f}{null:10d}\n')
                 
                 # Aggiorna i valori estremi delle coordinate
                 maxx = max(maxx, x)
@@ -578,7 +609,7 @@ class OrographyWindow:
     
     def create_landuse(self):
         """Crea il file uso terreno"""
-        if not RASTERIO_AVAILABLE:
+        if not RASTERIO_AVAILABLE or not PYPROJ_AVAILABLE:
             messagebox.showerror(
                 "Errore",
                 "Librerie mancanti per l'elaborazione uso terreno.\n\n"
