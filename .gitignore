@@ -28,6 +28,8 @@ wheels/
 *.egg
 
 # Project specific
+test/
+test/*
 Base procedura/
 Geotiff2/
 Outputs/
