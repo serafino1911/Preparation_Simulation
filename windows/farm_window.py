@@ -22,7 +22,7 @@ class FarmWindow:
         self.temp_dir = temp_dir
         self.window = tk.Toplevel(parent)
         self.window.title("Configurazione Farm")
-        self.window.geometry("650x650")
+        self.window.geometry("650x680")
         
         # Variabili Jump Server (primo server)
         self.ssh_host = tk.StringVar(value="linuxge.ge.infn.it")
@@ -36,6 +36,8 @@ class FarmWindow:
         self.target_host = tk.StringVar(value="hpcpmten1")
         self.target_username = tk.StringVar()
         self.target_password = tk.StringVar()
+        self.scheduler = tk.StringVar(value="lsf - bjobs")
+        self.slurm_partition = tk.StringVar()
         
         # Checkbox per usare le stesse credenziali
         self.same_credentials = tk.BooleanVar(value=True)
@@ -67,6 +69,8 @@ class FarmWindow:
                 self.ssh_key_path.set(config.get('ssh_key_path', ''))
                 self.target_host.set(config.get('target_host', 'hpcpmten1'))
                 self.target_username.set(config.get('target_username', ''))
+                self.scheduler.set(config.get('scheduler', 'lsf - bjobs'))
+                self.slurm_partition.set(config.get('slurm_partition', ''))
                 self.same_credentials.set(config.get('same_credentials', True))
                 # Non caricare la password target per sicurezza
                 self.working_folder.set(config.get('working_folder', ''))
@@ -202,6 +206,24 @@ class FarmWindow:
         
         self.target_password_entry = ttk.Entry(target_frame, textvariable=self.target_password, show="*")
         self.target_password_entry.grid(row=4, column=1, sticky=(tk.W, tk.E), pady=3)
+
+        # Scheduler
+        ttk.Label(target_frame, text="Scheduler:").grid(
+            row=5, column=0, sticky=tk.W, pady=3, padx=(0, 5)
+        )
+        ttk.Combobox(
+            target_frame,
+            textvariable=self.scheduler,
+            values=("lsf - bjobs", "slurm"),
+            state="readonly"
+        ).grid(row=5, column=1, sticky=tk.W, pady=3)
+
+        ttk.Label(target_frame, text="Partition Slurm (opzionale):").grid(
+            row=6, column=0, sticky=tk.W, pady=3, padx=(0, 5)
+        )
+        ttk.Entry(target_frame, textvariable=self.slurm_partition).grid(
+            row=6, column=1, sticky=(tk.W, tk.E), pady=3
+        )
         
         # === SEZIONE CARTELLA DI LAVORO ===
         folder_frame = ttk.LabelFrame(main_frame, text="📂 Cartella di Lavoro", padding="10")
@@ -666,6 +688,8 @@ class FarmWindow:
                 # Target Server
                 'target_host': self.target_host.get(),
                 'target_username': self.target_username.get(),
+                'scheduler': self.scheduler.get(),
+                'slurm_partition': self.slurm_partition.get().strip(),
                 'same_credentials': self.same_credentials.get(),
                 # Working folder
                 'working_folder': self.working_folder.get()

@@ -12,6 +12,14 @@ import os
 import re
 import stat
 import shlex
+from windows.farm_scheduler import (
+    build_check_jobs_command,
+    build_job_status_command,
+    build_submission_command,
+    classify_job_status,
+    extract_job_id,
+    normalize_scheduler,
+)
 from service.ctgproc_inp_writer import generate_ctgproc_inp
 from service.makegeo_inp_writer import generate_makegeo_inp
 from service.terrel_inp_writer import generate_terrel_inp
@@ -149,6 +157,22 @@ class FarmOperationsWindow_simple:
                 "Configura prima il Farm dalla finestra 'Configurazione Farm'."
             )
             return {}
+
+    def _scheduler_label(self):
+        return "Slurm" if normalize_scheduler(self.farm_config.get('scheduler')) == "slurm" else "LSF"
+
+    def _build_scheduler_submission(
+        self, command, output_path, error_path, working_directory=None, wrap_command=False
+    ):
+        return build_submission_command(
+            self.farm_config.get('scheduler', 'lsf - bjobs'),
+            command,
+            output_path,
+            error_path,
+            partition=self.farm_config.get('slurm_partition', ''),
+            working_directory=working_directory,
+            wrap_command=wrap_command,
+        )
     
     def setup_ui(self):
         """Configura l'interfaccia della finestra"""
@@ -231,8 +255,8 @@ class FarmOperationsWindow_simple:
 
         ttk.Button(
             operations_frame,
-            text="📊 Check BJobs",
-            command=self.check_bjobs,
+            text="📊 Check Jobs",
+            command=self.check_jobs,
             width=button_width
         ).grid(row=0, column=1, padx=button_padx, pady=button_pady, sticky=(tk.W, tk.E))
         
@@ -509,7 +533,7 @@ class FarmOperationsWindow_simple:
 
         tk.Checkbutton(
             dialog,
-            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            text="Esegui in background con lo scheduler selezionato (job non monitorato)",
             variable=background_var
         ).grid(row=4, column=0, sticky='w', padx=24, pady=(0, 10))
 
@@ -565,8 +589,9 @@ class FarmOperationsWindow_simple:
                 log_error = f"{work_folder}/permissions_error.log"
                 command = (
                     f'rm -f {shlex.quote(log_output)} {shlex.quote(log_error)} ; '
-                    f'bsub -q pmten -o {shlex.quote(log_output)} -e {shlex.quote(log_error)} '
-                    f'/bin/bash -lc {shlex.quote(chmod_command)}'
+                    + self._build_scheduler_submission(
+                        chmod_command, log_output, log_error, wrap_command=True
+                    )
                 )
                 operation_name = f"{operation_name} (background)"
 
@@ -598,12 +623,12 @@ class FarmOperationsWindow_simple:
         self.log_message(f"Target: {', '.join(dialog_result['targets'])}")
         self.log_message(f"Permesso: {dialog_result['permission']}")
         if dialog_result.get('run_in_background'):
-            self.log_message("Modalità esecuzione: background (bsub -q pmten, job non monitorato)")
+            self.log_message(f"Modalità esecuzione: background ({self._scheduler_label()}, job non monitorato)")
             self.log_message(f"Log output: {dialog_result.get('log_output')}")
             self.log_message(f"Log errori: {dialog_result.get('log_error')}")
             messagebox.showwarning(
                 "Attenzione",
-                "L'operazione Permissions verrà sottomessa in background con bsub -q pmten.\n"
+                f"L'operazione Permissions verrà sottomessa in background con {self._scheduler_label()}.\n"
                 "Il lavoro non sarà monitorato dalla UI."
             )
         else:
@@ -891,9 +916,10 @@ class FarmOperationsWindow_simple:
         thread.daemon = True
         thread.start()
 
-    def check_bjobs(self):
-        """Esegue bjobs sul server farm e stampa il risultato nel log"""
-        self.execute_remote_command("bjobs -w", "Check Bjobs")
+    def check_jobs(self):
+        """Mostra i job del scheduler selezionato sul server farm."""
+        command = build_check_jobs_command(self.farm_config.get('scheduler', 'lsf - bjobs'))
+        self.execute_remote_command(command, "Check Jobs")
 
     def _validate_remote_operation_prerequisites(self):
         """Valida prerequisiti comuni per operazioni SSH verso il farm."""
@@ -942,28 +968,21 @@ class FarmOperationsWindow_simple:
 
         return inp_folders
 
-    def _extract_bsub_job_id(self, bsub_output):
-        """Estrae il job id LSF dall'output standard di bsub."""
-        match = re.search(r"<([0-9]+)>", bsub_output or "")
-        if not match:
-            return None
-        return match.group(1)
+    def _extract_job_id(self, submission_output):
+        """Estrae l'ID del job dall'output dello scheduler configurato."""
+        return extract_job_id(self.farm_config.get('scheduler', 'lsf - bjobs'), submission_output)
 
-    def _wait_for_lsf_job_completion(self, target_client, job_id, operation_name, poll_seconds=20):
-        """Attende il completamento di un job LSF monitorandone lo stato."""
-        success_states = {"DONE"}
-        failure_states = {"EXIT"}
-        running_states = {"PEND", "RUN", "PSUSP", "USUSP", "SSUSP", "UNKWN", "WAIT", "PROV"}
+    def _wait_for_job_completion(self, target_client, job_id, operation_name, poll_seconds=20):
+        """Attende il completamento del job monitorando lo scheduler configurato."""
+        scheduler = self.farm_config.get('scheduler', 'lsf - bjobs')
+        scheduler_name = self._scheduler_label()
 
         self.log_message(f"Monitoraggio job {operation_name} (ID {job_id}) in corso...")
         last_status = None
         unknown_attempts = 0
 
         while True:
-            status_cmd = (
-                f'status=$(bjobs -a -noheader -o stat {job_id} 2>/dev/null | head -n 1 | tr -d "[:space:]"); '
-                f'if [ -n "$status" ]; then echo "$status"; else echo "UNKNOWN"; fi'
-            )
+            status_cmd = build_job_status_command(scheduler, job_id)
             stdin, stdout, stderr = target_client.exec_command(status_cmd)
             status = stdout.read().decode().strip().upper()
             stdout.channel.recv_exit_status()
@@ -972,20 +991,35 @@ class FarmOperationsWindow_simple:
                 self.log_message(f"Stato job {job_id}: {status}")
                 last_status = status
 
-            if status in success_states:
+            status_class = classify_job_status(scheduler, status)
+            if status_class == "success":
                 self.log_message(f"✓ Job {job_id} completato con successo ({status})")
                 return True
 
-            if status in failure_states:
+            if status_class == "failure":
                 raise RuntimeError(f"Job {job_id} terminato con stato {status}")
 
+            if status == "ACCOUNTING_UNAVAILABLE":
+                raise RuntimeError(
+                    "Impossibile verificare il completamento Slurm: il comando sacct non è disponibile."
+                )
+
             if status == "UNKNOWN":
-                # Dopo la sottomissione LSF può impiegare qualche secondo a indicizzare il job.
                 unknown_attempts += 1
                 if unknown_attempts >= 12:
-                    raise RuntimeError(f"Job {job_id} non visibile in bjobs dopo {unknown_attempts} tentativi")
-                self.log_message(f"Job {job_id} non ancora visibile in bjobs, nuovo tentativo tra {poll_seconds}s...")
-            elif status not in running_states:
+                    if normalize_scheduler(scheduler) == "slurm":
+                        raise RuntimeError(
+                            f"Stato finale del job {job_id} non disponibile tramite sacct. "
+                            "Verifica che lo Slurm accounting sia attivo e accessibile."
+                        )
+                    raise RuntimeError(
+                        f"Job {job_id} senza stato visibile con {scheduler_name} dopo {unknown_attempts} tentativi"
+                    )
+                self.log_message(
+                    f"Job {job_id} non ancora visibile con {scheduler_name}, "
+                    f"nuovo tentativo tra {poll_seconds}s..."
+                )
+            elif status_class == "unknown":
                 raise RuntimeError(f"Job {job_id} in stato inatteso: {status}")
             else:
                 unknown_attempts = 0
@@ -1919,11 +1953,16 @@ class FarmOperationsWindow_simple:
             
             self.log_message("✓ Script creato")
             
-            # Esegui con bsub
+            # Submit with the configured scheduler.
             self.log_message("\n" + "-"*50)
-            self.log_message("Sottomissione job con bsub -q pmten...")
+            self.log_message(f"Sottomissione job con {self._scheduler_label()}...")
             target_client.exec_command(f'cd {working_folder} && rm -f geo_output.log geo_error.log')  # Pulisci log precedenti
-            bsub_command = f'cd {working_folder}; bsub -q pmten -o geo_output.log -e geo_error.log ./run_geographic.sh'
+            bsub_command = self._build_scheduler_submission(
+                "./run_geographic.sh",
+                "geo_output.log",
+                "geo_error.log",
+                working_directory=working_folder,
+            )
             
             stdin, stdout, stderr = target_client.exec_command(bsub_command)
             output = stdout.read().decode()
@@ -1931,12 +1970,12 @@ class FarmOperationsWindow_simple:
             exit_status = stdout.channel.recv_exit_status()
             
             if output:
-                self.log_message(f"Output bsub:\n{output}")
+                self.log_message(f"Output {self._scheduler_label()}:\n{output}")
             if error:
-                self.log_message(f"Stderr bsub:\n{error}")
+                self.log_message(f"Errore {self._scheduler_label()}:\n{error}")
             
             if exit_status == 0:
-                job_id = self._extract_bsub_job_id(output)
+                job_id = self._extract_job_id(output)
                 self.log_message("\n✓ Job sottomesso con successo!")
                 if job_id:
                     self.log_message(f"Job ID: {job_id}")
@@ -1950,8 +1989,10 @@ class FarmOperationsWindow_simple:
 
                 if wait_for_completion:
                     if not job_id:
-                        raise RuntimeError("Impossibile monitorare il job Geographic: job ID non trovato nell'output bsub")
-                    self._wait_for_lsf_job_completion(target_client, job_id, "Geographic")
+                        raise RuntimeError(
+                            f"Impossibile monitorare il job Geographic: ID {self._scheduler_label()} non trovato nell'output"
+                        )
+                    self._wait_for_job_completion(target_client, job_id, "Geographic")
                 
                 messagebox.showinfo(
                     "Successo",
@@ -2076,7 +2117,7 @@ class FarmOperationsWindow_simple:
             "Granularità inferite: " + (', '.join(granularities) if granularities else "nessuna")
         )
         self.log_message(
-            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            f"Modalità esecuzione: background ({self._scheduler_label()}, job non monitorato)"
             if run_in_background else
             "Modalità esecuzione: foreground (monitorata dalla UI)"
         )
@@ -2084,7 +2125,7 @@ class FarmOperationsWindow_simple:
         if run_in_background:
             messagebox.showwarning(
                 "Attenzione",
-                "L'estrazione puntuale verrà sottomessa in background con bsub -q pmten.\n"
+                f"L'estrazione puntuale verrà sottomessa in background con {self._scheduler_label()}.\n"
                 "Il lavoro non sarà monitorato dalla UI."
             )
 
@@ -2182,9 +2223,8 @@ class FarmOperationsWindow_simple:
                 target_client.exec_command(f'chmod +x "{script_path}"')
                 target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-                bsub_command = (
-                    f'cd "{work_folder}"; '
-                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                bsub_command = self._build_scheduler_submission(
+                    script_path, bsub_out, bsub_err, working_directory=work_folder
                 )
                 stdin, stdout, stderr = target_client.exec_command(bsub_command)
                 output = stdout.read().decode().strip()
@@ -2192,9 +2232,9 @@ class FarmOperationsWindow_simple:
                 exit_status = stdout.channel.recv_exit_status()
 
                 if output:
-                    self.log_message(f"Output bsub puntuale:\n{output}")
+                    self.log_message(f"Output {self._scheduler_label()} puntuale:\n{output}")
                 if error:
-                    self.log_message(f"Stderr bsub puntuale:\n{error}")
+                    self.log_message(f"Errore {self._scheduler_label()} puntuale:\n{error}")
 
                 if exit_status != 0:
                     raise RuntimeError(error or f"Sottomissione puntuale fallita con exit code {exit_status}")
@@ -2204,7 +2244,7 @@ class FarmOperationsWindow_simple:
                 self.log_message(f"Log errori: {bsub_err}")
                 messagebox.showwarning(
                     "Job Puntuale Sottomesso",
-                    "Job puntuale sottomesso con bsub -q pmten.\n\n"
+                    f"Job puntuale sottomesso con {self._scheduler_label()}.\n\n"
                     "Il lavoro non è monitorato dalla UI.\n"
                     f"Controlla i log:\n{bsub_out}\n{bsub_err}"
                 )
@@ -2487,7 +2527,7 @@ class FarmOperationsWindow_simple:
                 pass
     
     def launch_calmet(self):
-        """Lancia CALMET su tutti i file .inp in ordine data con job bsub sequenziale"""
+        """Lancia CALMET in sequenza tramite lo scheduler configurato."""
         if not PARAMIKO_AVAILABLE:
             messagebox.showerror(
                 "Errore",
@@ -2554,7 +2594,7 @@ class FarmOperationsWindow_simple:
         thread.start()
 
     def _launch_calmet_thread(self, wrf_path, calmet_data, link_calmet=False, wait_for_completion=False):
-        """Thread per preparare script remoto CALMET e sottometterlo via bsub"""
+        """Thread per preparare e sottomettere il batch CALMET."""
         jump_client = None
         target_client = None
         try:
@@ -2645,10 +2685,9 @@ class FarmOperationsWindow_simple:
             bsub_err = f"{calmet_data_dir}/calmet_batch_error.log"
             target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-            self.log_message("Sottomissione job CALMET con bsub -q pmten...")
-            bsub_command = (
-                f'cd "{work_folder}"; '
-                f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+            self.log_message(f"Sottomissione job CALMET con {self._scheduler_label()}...")
+            bsub_command = self._build_scheduler_submission(
+                script_path, bsub_out, bsub_err, working_directory=work_folder
             )
             stdin, stdout, stderr = target_client.exec_command(bsub_command)
             output = stdout.read().decode().strip()
@@ -2656,11 +2695,11 @@ class FarmOperationsWindow_simple:
             exit_status = stdout.channel.recv_exit_status()
 
             if output:
-                self.log_message(f"Output bsub:\n{output}")
+                self.log_message(f"Output {self._scheduler_label()}:\n{output}")
             if error:
-                self.log_message(f"Stderr bsub:\n{error}")
+                self.log_message(f"Errore {self._scheduler_label()}:\n{error}")
 
-            job_id = self._extract_bsub_job_id(output)
+            job_id = self._extract_job_id(output)
 
             if exit_status == 0:
                 self.log_message("\n✓ Job CALMET sottomesso con successo!")
@@ -2673,8 +2712,10 @@ class FarmOperationsWindow_simple:
 
                 if wait_for_completion:
                     if not job_id:
-                        raise RuntimeError("Impossibile monitorare il job CALMET: job ID non trovato nell'output bsub")
-                    self._wait_for_lsf_job_completion(target_client, job_id, "CALMET")
+                        raise RuntimeError(
+                            f"Impossibile monitorare il job CALMET: ID {self._scheduler_label()} non trovato nell'output"
+                        )
+                    self._wait_for_job_completion(target_client, job_id, "CALMET")
 
                 messagebox.showinfo(
                     "Successo",
@@ -2687,7 +2728,7 @@ class FarmOperationsWindow_simple:
                 )
                 return True
             else:
-                raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
+                raise RuntimeError(f"Errore durante la sottomissione {self._scheduler_label()} (exit code {exit_status})")
 
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
@@ -2710,7 +2751,7 @@ class FarmOperationsWindow_simple:
         self._load_inp_by_pattern("Load inp CALPUFF", "CALPUFF_INP*")
     
     def launch_calpuff(self):
-        """Lancia CALPUFF su tutti i file .inp in ordine data con job bsub sequenziale"""
+        """Lancia CALPUFF in sequenza tramite lo scheduler configurato."""
         if not PARAMIKO_AVAILABLE:
             messagebox.showerror(
                 "Errore",
@@ -2769,7 +2810,7 @@ class FarmOperationsWindow_simple:
         thread.start()
 
     def _launch_calpuff_thread(self, calpuff_data, calmet_data='CALMETDATA', link_calmet=False, wait_for_completion=False):
-        """Thread per preparare script remoto CALPUFF e sottometterlo via bsub"""
+        """Thread per preparare e sottomettere il batch CALPUFF."""
         jump_client = None
         target_client = None
         try:
@@ -2859,10 +2900,9 @@ class FarmOperationsWindow_simple:
             bsub_err = f"{calpuff_data_dir}/calpuff_batch_error.log"
             target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-            self.log_message("Sottomissione job CALPUFF con bsub -q pmten...")
-            bsub_command = (
-                f'cd "{work_folder}"; '
-                f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+            self.log_message(f"Sottomissione job CALPUFF con {self._scheduler_label()}...")
+            bsub_command = self._build_scheduler_submission(
+                script_path, bsub_out, bsub_err, working_directory=work_folder
             )
             stdin, stdout, stderr = target_client.exec_command(bsub_command)
             output = stdout.read().decode().strip()
@@ -2870,11 +2910,11 @@ class FarmOperationsWindow_simple:
             exit_status = stdout.channel.recv_exit_status()
 
             if output:
-                self.log_message(f"Output bsub:\n{output}")
+                self.log_message(f"Output {self._scheduler_label()}:\n{output}")
             if error:
-                self.log_message(f"Stderr bsub:\n{error}")
+                self.log_message(f"Errore {self._scheduler_label()}:\n{error}")
 
-            job_id = self._extract_bsub_job_id(output)
+            job_id = self._extract_job_id(output)
 
             if exit_status == 0:
                 self.log_message("\n✓ Job CALPUFF sottomesso con successo!")
@@ -2887,8 +2927,10 @@ class FarmOperationsWindow_simple:
 
                 if wait_for_completion:
                     if not job_id:
-                        raise RuntimeError("Impossibile monitorare il job CALPUFF: job ID non trovato nell'output bsub")
-                    self._wait_for_lsf_job_completion(target_client, job_id, "CALPUFF")
+                        raise RuntimeError(
+                            f"Impossibile monitorare il job CALPUFF: ID {self._scheduler_label()} non trovato nell'output"
+                        )
+                    self._wait_for_job_completion(target_client, job_id, "CALPUFF")
 
                 messagebox.showinfo(
                     "Successo",
@@ -2901,7 +2943,7 @@ class FarmOperationsWindow_simple:
                 )
                 return True
             else:
-                raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
+                raise RuntimeError(f"Errore durante la sottomissione {self._scheduler_label()} (exit code {exit_status})")
 
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
@@ -2924,7 +2966,7 @@ class FarmOperationsWindow_simple:
         self._load_inp_by_pattern("Load inp CALPOST", "CALPOST_INP*")
     
     def launch_calpost(self):
-        """Lancia CALPOST su tutti i file .inp in ordine data/ora con job bsub sequenziale"""
+        """Lancia CALPOST in sequenza tramite lo scheduler configurato."""
         if not PARAMIKO_AVAILABLE:
             messagebox.showerror(
                 "Errore",
@@ -2980,7 +3022,7 @@ class FarmOperationsWindow_simple:
         thread.start()
 
     def _launch_calpost_thread(self, calpost_data, calpuff_data, wait_for_completion=False):
-        """Thread per preparare script remoto CALPOST e sottometterlo via bsub"""
+        """Thread per preparare e sottomettere il batch CALPOST."""
         jump_client = None
         target_client = None
         try:
@@ -3071,10 +3113,9 @@ class FarmOperationsWindow_simple:
             bsub_err = f"{calpost_data_dir}/calpost_batch_error.log"
             target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-            self.log_message("Sottomissione job CALPOST con bsub -q pmten...")
-            bsub_command = (
-                f'cd "{work_folder}"; '
-                f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+            self.log_message(f"Sottomissione job CALPOST con {self._scheduler_label()}...")
+            bsub_command = self._build_scheduler_submission(
+                script_path, bsub_out, bsub_err, working_directory=work_folder
             )
             stdin, stdout, stderr = target_client.exec_command(bsub_command)
             output = stdout.read().decode().strip()
@@ -3082,11 +3123,11 @@ class FarmOperationsWindow_simple:
             exit_status = stdout.channel.recv_exit_status()
 
             if output:
-                self.log_message(f"Output bsub:\n{output}")
+                self.log_message(f"Output {self._scheduler_label()}:\n{output}")
             if error:
-                self.log_message(f"Stderr bsub:\n{error}")
+                self.log_message(f"Errore {self._scheduler_label()}:\n{error}")
 
-            job_id = self._extract_bsub_job_id(output)
+            job_id = self._extract_job_id(output)
 
             if exit_status == 0:
                 self.log_message("\n✓ Job CALPOST sottomesso con successo!")
@@ -3099,8 +3140,10 @@ class FarmOperationsWindow_simple:
 
                 if wait_for_completion:
                     if not job_id:
-                        raise RuntimeError("Impossibile monitorare il job CALPOST: job ID non trovato nell'output bsub")
-                    self._wait_for_lsf_job_completion(target_client, job_id, "CALPOST")
+                        raise RuntimeError(
+                            f"Impossibile monitorare il job CALPOST: ID {self._scheduler_label()} non trovato nell'output"
+                        )
+                    self._wait_for_job_completion(target_client, job_id, "CALPOST")
 
                 messagebox.showinfo(
                     "Successo",
@@ -3113,7 +3156,7 @@ class FarmOperationsWindow_simple:
                 )
                 return True
             else:
-                raise RuntimeError(f"Errore durante la sottomissione bsub (exit code {exit_status})")
+                raise RuntimeError(f"Errore durante la sottomissione {self._scheduler_label()} (exit code {exit_status})")
 
         except Exception as e:
             self.log_message(f"\n✗ ERRORE: {str(e)}")
@@ -3226,7 +3269,7 @@ class FarmOperationsWindow_simple:
         background_var = tk.BooleanVar(value=saved_background)
         tk.Checkbutton(
             dialog,
-            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            text="Esegui in background con lo scheduler selezionato (job non monitorato)",
             variable=background_var
         ).grid(row=5, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 12))
 
@@ -3280,7 +3323,7 @@ class FarmOperationsWindow_simple:
         self.log_message(f"Modalità aggregazione: {aggregation_mode}")
         self.log_message(f"Cartella destinazione: {aggreg_folder}/<PARAMETRO>")
         self.log_message(
-            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            f"Modalità esecuzione: background ({self._scheduler_label()}, job non monitorato)"
             if run_in_background else
             "Modalità esecuzione: foreground (monitorata dalla UI)"
         )
@@ -3288,7 +3331,7 @@ class FarmOperationsWindow_simple:
         if run_in_background:
             messagebox.showwarning(
                 "Attenzione",
-                "L'aggregazione verrà sottomessa in background con bsub -q pmten.\n"
+                f"L'aggregazione verrà sottomessa in background con {self._scheduler_label()}.\n"
                 "Il lavoro non sarà monitorato dalla UI."
             )
 
@@ -3382,9 +3425,8 @@ class FarmOperationsWindow_simple:
                 target_client.exec_command(f'chmod +x "{script_path}"')
                 target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-                bsub_command = (
-                    f'cd "{work_folder}"; '
-                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                bsub_command = self._build_scheduler_submission(
+                    script_path, bsub_out, bsub_err, working_directory=work_folder
                 )
                 stdin, stdout, stderr = target_client.exec_command(bsub_command)
                 output = stdout.read().decode().strip()
@@ -3392,9 +3434,9 @@ class FarmOperationsWindow_simple:
                 exit_status = stdout.channel.recv_exit_status()
 
                 if output:
-                    self.log_message(f"Output bsub aggregazione:\n{output}")
+                    self.log_message(f"Output {self._scheduler_label()} aggregazione:\n{output}")
                 if error:
-                    self.log_message(f"Stderr bsub aggregazione:\n{error}")
+                    self.log_message(f"Errore {self._scheduler_label()} aggregazione:\n{error}")
 
                 if exit_status != 0:
                     raise RuntimeError(error or f"Sottomissione aggregazione fallita con exit code {exit_status}")
@@ -3404,7 +3446,7 @@ class FarmOperationsWindow_simple:
                 self.log_message(f"Log errori: {bsub_err}")
                 messagebox.showwarning(
                     "Job Aggregazione Sottomesso",
-                    "Job aggregazione sottomesso con bsub -q pmten.\n\n"
+                    f"Job aggregazione sottomesso con {self._scheduler_label()}.\n\n"
                     "Il lavoro non è monitorato dalla UI.\n"
                     f"Controlla i log:\n{bsub_out}\n{bsub_err}"
                 )
@@ -3576,7 +3618,7 @@ class FarmOperationsWindow_simple:
         background_var = tk.BooleanVar(value=saved_background)
         tk.Checkbutton(
             dialog,
-            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            text="Esegui in background con lo scheduler selezionato (job non monitorato)",
             variable=background_var
         ).grid(row=9, column=0, columnspan=2, sticky='w', padx=24, pady=(8, 0))
 
@@ -3649,7 +3691,7 @@ class FarmOperationsWindow_simple:
         self.log_message(f"Destinazione: {destination_folder}")
         self.log_message(f"Granularità selezionate: {', '.join(granularities)}")
         self.log_message(
-            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            f"Modalità esecuzione: background ({self._scheduler_label()}, job non monitorato)"
             if run_in_background else
             "Modalità esecuzione: foreground (monitorata dalla UI)"
         )
@@ -3657,7 +3699,7 @@ class FarmOperationsWindow_simple:
         if run_in_background:
             messagebox.showwarning(
                 "Attenzione",
-                "Il calcolo medie verrà sottomesso in background con bsub -q pmten.\n"
+                f"Il calcolo medie verrà sottomesso in background con {self._scheduler_label()}.\n"
                 "Il lavoro non sarà monitorato dalla UI."
             )
 
@@ -3750,9 +3792,8 @@ class FarmOperationsWindow_simple:
                 target_client.exec_command(f'chmod +x "{script_path}"')
                 target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-                bsub_command = (
-                    f'cd "{work_folder}"; '
-                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                bsub_command = self._build_scheduler_submission(
+                    script_path, bsub_out, bsub_err, working_directory=work_folder
                 )
                 stdin, stdout, stderr = target_client.exec_command(bsub_command)
                 output = stdout.read().decode().strip()
@@ -3760,9 +3801,9 @@ class FarmOperationsWindow_simple:
                 exit_status = stdout.channel.recv_exit_status()
 
                 if output:
-                    self.log_message(f"Output bsub medie:\n{output}")
+                    self.log_message(f"Output {self._scheduler_label()} medie:\n{output}")
                 if error:
-                    self.log_message(f"Stderr bsub medie:\n{error}")
+                    self.log_message(f"Errore {self._scheduler_label()} medie:\n{error}")
 
                 if exit_status != 0:
                     raise RuntimeError(error or f"Sottomissione medie fallita con exit code {exit_status}")
@@ -3772,7 +3813,7 @@ class FarmOperationsWindow_simple:
                 self.log_message(f"Log errori: {bsub_err}")
                 messagebox.showwarning(
                     "Job Medie Sottomesso",
-                    "Job medie sottomesso con bsub -q pmten.\n\n"
+                    f"Job medie sottomesso con {self._scheduler_label()}.\n\n"
                     "Il lavoro non è monitorato dalla UI.\n"
                     f"Controlla i log:\n{bsub_out}\n{bsub_err}"
                 )
@@ -4040,7 +4081,7 @@ class FarmOperationsWindow_simple:
         background_var = tk.BooleanVar(value=default_background)
         tk.Checkbutton(
             dialog,
-            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            text="Esegui in background con lo scheduler selezionato (job non monitorato)",
             variable=background_var
         ).grid(row=current_row, column=0, columnspan=2, sticky='w', padx=24, pady=(8, 8))
         current_row += 1
@@ -4136,7 +4177,7 @@ class FarmOperationsWindow_simple:
         self.log_message(f"Sorgente: {source_folder}")
         self.log_message(f"Destinazione: {destination_folder}")
         self.log_message(
-            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            f"Modalità esecuzione: background ({self._scheduler_label()}, job non monitorato)"
             if run_in_background else
             "Modalità esecuzione: foreground (monitorata dalla UI)"
         )
@@ -4144,7 +4185,7 @@ class FarmOperationsWindow_simple:
         if run_in_background:
             messagebox.showwarning(
                 "Attenzione",
-                "La TimeSeries Meteo Puntuale verrà sottomessa in background con bsub -q pmten.\n"
+                f"La TimeSeries Meteo Puntuale verrà sottomessa in background con {self._scheduler_label()}.\n"
                 "Il lavoro non sarà monitorato dalla UI."
             )
 
@@ -4235,7 +4276,7 @@ class FarmOperationsWindow_simple:
         self.log_message(f"Formati output: {', '.join(output_formats)}")
         self.log_message(f"Coordinate output: {', '.join(output_coordinates)}")
         self.log_message(
-            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            f"Modalità esecuzione: background ({self._scheduler_label()}, job non monitorato)"
             if run_in_background else
             "Modalità esecuzione: foreground (monitorata dalla UI)"
         )
@@ -4243,7 +4284,7 @@ class FarmOperationsWindow_simple:
         if run_in_background:
             messagebox.showwarning(
                 "Attenzione",
-                "La TimeSeries Meteo Campo verrà sottomessa in background con bsub -q pmten.\n"
+                f"La TimeSeries Meteo Campo verrà sottomessa in background con {self._scheduler_label()}.\n"
                 "Il lavoro non sarà monitorato dalla UI."
             )
 
@@ -4381,9 +4422,12 @@ class FarmOperationsWindow_simple:
                 target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
                 script_path = f'source {work_folder}/.venv/bin/activate; {script_path}'
-                bsub_command = (
-                    f'cd "{work_folder}"; '
-                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                bsub_command = self._build_scheduler_submission(
+                    script_path,
+                    bsub_out,
+                    bsub_err,
+                    working_directory=work_folder,
+                    wrap_command=True,
                 )
                 stdin, stdout, stderr = target_client.exec_command(bsub_command)
                 output = stdout.read().decode().strip()
@@ -4391,9 +4435,9 @@ class FarmOperationsWindow_simple:
                 exit_status = stdout.channel.recv_exit_status()
 
                 if output:
-                    self.log_message(f"Output bsub TimeSeries {timeseries_kind}:\n{output}")
+                    self.log_message(f"Output {self._scheduler_label()} TimeSeries {timeseries_kind}:\n{output}")
                 if error:
-                    self.log_message(f"Stderr bsub TimeSeries {timeseries_kind}:\n{error}")
+                    self.log_message(f"Errore {self._scheduler_label()} TimeSeries {timeseries_kind}:\n{error}")
 
                 if exit_status != 0:
                     raise RuntimeError(error or f"Sottomissione TimeSeries fallita con exit code {exit_status}")
@@ -4403,7 +4447,7 @@ class FarmOperationsWindow_simple:
                 self.log_message(f"Log errori: {bsub_err}")
                 messagebox.showwarning(
                     "Job TimeSeries Sottomesso",
-                    f"Job TimeSeries {timeseries_kind} sottomesso con bsub -q pmten.\n\n"
+                    f"Job TimeSeries {timeseries_kind} sottomesso con {self._scheduler_label()}.\n\n"
                     "Il lavoro non è monitorato dalla UI.\n"
                     f"Controlla i log:\n{bsub_out}\n{bsub_err}"
                 )
@@ -4609,7 +4653,7 @@ class FarmOperationsWindow_simple:
         background_var = tk.BooleanVar(value=saved_background)
         tk.Checkbutton(
             dialog,
-            text="Esegui in background con bsub -q pmten (job non monitorato)",
+            text="Esegui in background con lo scheduler selezionato (job non monitorato)",
             variable=background_var
         ).grid(row=17, column=0, columnspan=2, sticky='w', padx=24, pady=(0, 8))
 
@@ -4740,7 +4784,7 @@ class FarmOperationsWindow_simple:
         self.log_message(f"Granularità selezionate: {', '.join(granularities)}")
         self.log_message("Percentili selezionati: " + ", ".join(f"P{_fmt_percentile(value)}" for value in percentiles))
         self.log_message(
-            "Modalità esecuzione: background (bsub -q pmten, job non monitorato)"
+            f"Modalità esecuzione: background ({self._scheduler_label()}, job non monitorato)"
             if run_in_background else
             "Modalità esecuzione: foreground (monitorata dalla UI)"
         )
@@ -4748,7 +4792,7 @@ class FarmOperationsWindow_simple:
         if run_in_background:
             messagebox.showwarning(
                 "Attenzione",
-                "Il calcolo percentili verrà sottomesso in background con bsub -q pmten.\n"
+                f"Il calcolo percentili verrà sottomesso in background con {self._scheduler_label()}.\n"
                 "Il lavoro non sarà monitorato dalla UI."
             )
 
@@ -4843,9 +4887,8 @@ class FarmOperationsWindow_simple:
                 target_client.exec_command(f'chmod +x "{script_path}"')
                 target_client.exec_command(f'rm -f "{bsub_out}" "{bsub_err}"')
 
-                bsub_command = (
-                    f'cd "{work_folder}"; '
-                    f'bsub -q pmten -o "{bsub_out}" -e "{bsub_err}" "{script_path}"'
+                bsub_command = self._build_scheduler_submission(
+                    script_path, bsub_out, bsub_err, working_directory=work_folder
                 )
                 stdin, stdout, stderr = target_client.exec_command(bsub_command)
                 output = stdout.read().decode().strip()
@@ -4853,9 +4896,9 @@ class FarmOperationsWindow_simple:
                 exit_status = stdout.channel.recv_exit_status()
 
                 if output:
-                    self.log_message(f"Output bsub percentili:\n{output}")
+                    self.log_message(f"Output {self._scheduler_label()} percentili:\n{output}")
                 if error:
-                    self.log_message(f"Stderr bsub percentili:\n{error}")
+                    self.log_message(f"Errore {self._scheduler_label()} percentili:\n{error}")
 
                 if exit_status != 0:
                     raise RuntimeError(error or f"Sottomissione percentili fallita con exit code {exit_status}")
@@ -4865,7 +4908,7 @@ class FarmOperationsWindow_simple:
                 self.log_message(f"Log errori: {bsub_err}")
                 messagebox.showwarning(
                     "Job Percentili Sottomesso",
-                    "Job percentili sottomesso con bsub -q pmten.\n\n"
+                    f"Job percentili sottomesso con {self._scheduler_label()}.\n\n"
                     "Il lavoro non è monitorato dalla UI.\n"
                     f"Controlla i log:\n{bsub_out}\n{bsub_err}"
                 )

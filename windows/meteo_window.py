@@ -10,6 +10,7 @@ import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import ttk, messagebox
+from windows.farm_scheduler import build_submission_command, normalize_scheduler
 
 try:
     import tkintermapview
@@ -113,7 +114,7 @@ class MeteoWindow:
         ttk.Checkbutton(config_frame, text="CONVERT", variable=self.convert_var).grid(row=4, column=0, sticky=tk.W, pady=4)
         ttk.Checkbutton(config_frame, text="LINK_FILE", variable=self.link_file).grid(row=4, column=1, sticky=tk.W, pady=4)
 
-        ttk.Checkbutton(config_frame, text="Run in background (bsub -q pmten)", variable=self.run_background).grid(
+        ttk.Checkbutton(config_frame, text="Run in background with selected scheduler", variable=self.run_background).grid(
             row=5, column=0, columnspan=4, sticky=tk.W, pady=(8, 2)
         )
 
@@ -1109,19 +1110,26 @@ class MeteoWindow:
             target_client.exec_command(f'rm -f "{log_out}" "{log_err}"')
 
             if bool(config.get("RUN_BACKGROUND", True)):
-                bsub_command = (
-                    f'cd "{work_folder}"; '
-                    f'bsub -q pmten -o "{log_out}" -e "{log_err}" "{script_path}"'
+                farm_config = getattr(self.farm_controller, "farm_config", {})
+                scheduler = farm_config.get("scheduler", "lsf - bjobs")
+                scheduler_name = "Slurm" if normalize_scheduler(scheduler) == "slurm" else "LSF"
+                submission_command = build_submission_command(
+                    scheduler,
+                    script_path,
+                    log_out,
+                    log_err,
+                    partition=farm_config.get("slurm_partition", ""),
+                    working_directory=work_folder,
                 )
-                stdin, stdout, stderr = target_client.exec_command(bsub_command)
+                stdin, stdout, stderr = target_client.exec_command(submission_command)
                 output = stdout.read().decode().strip()
                 error = stderr.read().decode().strip()
                 exit_status = stdout.channel.recv_exit_status()
 
                 if output:
-                    self._log(f"Launch Meteo bsub output:\n{output}")
+                    self._log(f"Launch Meteo {scheduler_name} output:\n{output}")
                 if error:
-                    self._log(f"Launch Meteo bsub stderr:\n{error}")
+                    self._log(f"Launch Meteo {scheduler_name} stderr:\n{error}")
 
                 if exit_status != 0:
                     raise RuntimeError(f"Sottomissione Meteo fallita con exit code {exit_status}")
@@ -1131,7 +1139,7 @@ class MeteoWindow:
                 self._log(f"Log errori: {log_err}")
                 messagebox.showwarning(
                     "Job Meteo Sottomesso",
-                    "Job Meteo sottomesso con bsub -q pmten.\n\n"
+                    f"Job Meteo sottomesso con {scheduler_name}.\n\n"
                     f"Log output: {log_out}\n"
                     f"Log errori: {log_err}"
                 )

@@ -308,7 +308,7 @@ class ConfigPuntualeWindow:
         ttk.Checkbutton(checks_frame, text="Annual", variable=self.annual_var).grid(row=4, column=0, sticky=tk.W)
         ttk.Checkbutton(
             checks_frame,
-            text="Esegui in background con bsub -q pmten",
+            text="Esegui in background con lo scheduler selezionato",
             variable=self.background_var
         ).grid(row=5, column=0, sticky=tk.W, pady=(8, 0))
 
