@@ -8,8 +8,11 @@ import json
 import math
 import os
 import re
+from windows.map_tiles import configure_tkintermapview
+
 try:
     import tkintermapview
+    configure_tkintermapview()
     MAPVIEW_AVAILABLE = True
 except ImportError:
     MAPVIEW_AVAILABLE = False
@@ -277,7 +280,7 @@ class DomainWindow:
                 self.map_widget = tkintermapview.TkinterMapView(map_frame, corner_radius=0)
                 self.map_widget.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
                 # Imposta il tile server (OpenStreetMap)
-                self.map_widget.set_tile_server("https://a.tile.openstreetmap.org/{z}/{x}/{y}.png")
+                self.map_widget.set_tile_server("https://tile.openstreetmap.org/{z}/{x}/{y}.png")
                 print("MapView creato con successo")
             except Exception as e:
                 print(f"Errore creazione MapView: {e}")

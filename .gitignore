@@ -59,3 +59,4 @@ Thumbs.db
 *.csv
 tmp*/
 temp*/
+tile_cache/

@@ -7,10 +7,12 @@ from tkinter import ttk, messagebox, filedialog
 import json
 import math
 from pathlib import Path
+from windows.map_tiles import configure_tkintermapview
 
 # Import opzionali per la mappa
 try:
     import tkintermapview
+    configure_tkintermapview()
     from pyproj import CRS, Transformer
     MAPVIEW_AVAILABLE = True
     PYPROJ_AVAILABLE = True

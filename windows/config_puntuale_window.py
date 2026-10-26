@@ -7,9 +7,11 @@ import math
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
+from windows.map_tiles import configure_tkintermapview
 
 try:
     import tkintermapview
+    configure_tkintermapview()
     MAPVIEW_AVAILABLE = True
 except ImportError:
     MAPVIEW_AVAILABLE = False
