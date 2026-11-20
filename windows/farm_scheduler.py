@@ -48,6 +48,7 @@ def build_submission_command(
     queue="pmten",
     working_directory=None,
     wrap_command=False,
+    node="",
 ):
     """Build an LSF or Slurm submission command for a script or shell command."""
     scheduler = normalize_scheduler(scheduler)
@@ -55,6 +56,9 @@ def build_submission_command(
         options = ["sbatch", "--parsable"]
         if partition:
             options.append(f"--partition={shlex.quote(str(partition))}")
+        node = str(node or "").strip()
+        if node:
+            options.extend(("-w", shlex.quote(node)))
         options.extend((
             f"--output={shlex.quote(str(output_path))}",
             f"--error={shlex.quote(str(error_path))}",

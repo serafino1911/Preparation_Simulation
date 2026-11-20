@@ -1121,6 +1121,7 @@ class MeteoWindow:
                     log_out,
                     log_err,
                     partition=farm_config.get("slurm_partition", ""),
+                    node=farm_config.get("slurm_node", ""),
                     working_directory=work_folder,
                 )
                 stdin, stdout, stderr = target_client.exec_command(submission_command)

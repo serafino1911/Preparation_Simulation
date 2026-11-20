@@ -137,7 +137,7 @@ In pratica: la home apre i moduli principali, CALPUFF apre le sotto-app emission
 | Dominio Temporale | `temp_config/temporal_config.json` (se presente) | `temp_config/temporal_config.json` | Imposta intervallo date per generazione INP |
 | Configura CALMET | `domain_config.json`, `temporal_config.json`, `calmet_config.json` | `temp_config/calmet_config.json` | Salva parametri CALMET e puo generare i file in `CALMET_INP/` |
 | Configura CALPUFF | `temp_config/calpuff_config.json` | `temp_config/calpuff_config.json` | Salva configurazione base CALPUFF + componenti emissioni/specie/scaling; puo generare `CALPUFF_INP/` e `CALPOST_INP/` |
-| Configurazione Farm | `temp_config/farm_config.json` (se presente) | `temp_config/farm_config.json` | Salva endpoint e parametri di connessione/working folder |
+| Configurazione Farm | `temp_config/farm_config.json` (se presente) | `temp_config/farm_config.json` | Salva endpoint, parametri di connessione/working folder e opzioni Slurm (partition e nodo opzionali) |
 | Operazioni sul Farm | `farm_config.json` + altri JSON di configurazione | `temp_config/post_process.json` (in base alle operazioni) | Esegue prepare/upload/launch remoti e orchestration job |
 | Meteo (richiamabile da Farm Ops) | `domain_config.json`, `temporal_config.json`, `calmet_config.json` | `temp_config/meteo_config.json` | Configura e lancia operazioni meteo |
 | Config puntuale (richiamabile da Meteo/Farm Ops) | `domain_config.json`, `post_process.json` (se presente) | `temp_config/post_process.json` | Definisce punti di estrazione e opzioni post-process |

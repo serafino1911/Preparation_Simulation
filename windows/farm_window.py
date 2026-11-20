@@ -22,7 +22,7 @@ class FarmWindow:
         self.temp_dir = temp_dir
         self.window = tk.Toplevel(parent)
         self.window.title("Configurazione Farm")
-        self.window.geometry("650x680")
+        self.window.geometry("650x710")
         
         # Variabili Jump Server (primo server)
         self.ssh_host = tk.StringVar(value="linuxge.ge.infn.it")
@@ -38,6 +38,7 @@ class FarmWindow:
         self.target_password = tk.StringVar()
         self.scheduler = tk.StringVar(value="lsf - bjobs")
         self.slurm_partition = tk.StringVar()
+        self.slurm_node = tk.StringVar()
         
         # Checkbox per usare le stesse credenziali
         self.same_credentials = tk.BooleanVar(value=True)
@@ -71,6 +72,7 @@ class FarmWindow:
                 self.target_username.set(config.get('target_username', ''))
                 self.scheduler.set(config.get('scheduler', 'lsf - bjobs'))
                 self.slurm_partition.set(config.get('slurm_partition', ''))
+                self.slurm_node.set(config.get('slurm_node', ''))
                 self.same_credentials.set(config.get('same_credentials', True))
                 # Non caricare la password target per sicurezza
                 self.working_folder.set(config.get('working_folder', ''))
@@ -211,18 +213,35 @@ class FarmWindow:
         ttk.Label(target_frame, text="Scheduler:").grid(
             row=5, column=0, sticky=tk.W, pady=3, padx=(0, 5)
         )
-        ttk.Combobox(
+        scheduler_combobox = ttk.Combobox(
             target_frame,
             textvariable=self.scheduler,
             values=("lsf - bjobs", "slurm"),
             state="readonly"
-        ).grid(row=5, column=1, sticky=tk.W, pady=3)
+        )
+        scheduler_combobox.grid(row=5, column=1, sticky=tk.W, pady=3)
+        scheduler_combobox.bind(
+            "<<ComboboxSelected>>", lambda _event: self.toggle_slurm_node()
+        )
 
         ttk.Label(target_frame, text="Partition Slurm (opzionale):").grid(
             row=6, column=0, sticky=tk.W, pady=3, padx=(0, 5)
         )
         ttk.Entry(target_frame, textvariable=self.slurm_partition).grid(
             row=6, column=1, sticky=(tk.W, tk.E), pady=3
+        )
+
+        self.slurm_node_label = ttk.Label(
+            target_frame, text="Nodo Slurm (opzionale):"
+        )
+        self.slurm_node_label.grid(
+            row=7, column=0, sticky=tk.W, pady=3, padx=(0, 5)
+        )
+        self.slurm_node_entry = ttk.Entry(
+            target_frame, textvariable=self.slurm_node
+        )
+        self.slurm_node_entry.grid(
+            row=7, column=1, sticky=(tk.W, tk.E), pady=3
         )
         
         # === SEZIONE CARTELLA DI LAVORO ===
@@ -278,6 +297,16 @@ class FarmWindow:
         # Imposta lo stato iniziale dei campi
         self.toggle_auth_method()
         self.toggle_target_credentials()
+        self.toggle_slurm_node()
+
+    def toggle_slurm_node(self):
+        """Mostra il nodo solo quando è selezionato Slurm."""
+        if self.scheduler.get().strip().lower() == "slurm":
+            self.slurm_node_label.grid()
+            self.slurm_node_entry.grid()
+        else:
+            self.slurm_node_label.grid_remove()
+            self.slurm_node_entry.grid_remove()
     
     def toggle_auth_method(self):
         """Attiva/disattiva i campi in base al metodo di autenticazione"""
@@ -690,6 +719,7 @@ class FarmWindow:
                 'target_username': self.target_username.get(),
                 'scheduler': self.scheduler.get(),
                 'slurm_partition': self.slurm_partition.get().strip(),
+                'slurm_node': self.slurm_node.get().strip(),
                 'same_credentials': self.same_credentials.get(),
                 # Working folder
                 'working_folder': self.working_folder.get()

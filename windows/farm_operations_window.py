@@ -200,6 +200,7 @@ class FarmOperationsWindow:
             output_path,
             error_path,
             partition=self.farm_config.get('slurm_partition', ''),
+            node=self.farm_config.get('slurm_node', ''),
             working_directory=working_directory,
             wrap_command=wrap_command,
         )
