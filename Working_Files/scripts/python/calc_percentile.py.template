@@ -1,8 +1,10 @@
 from pathlib import Path
+from array import array
 import csv
 import json
 import re
 import sys
+from itertools import chain
 
 source_root = Path(${TPL_SOURCE_ROOT_LITERAL})
 destination_root = Path(${TPL_DESTINATION_ROOT_LITERAL})
@@ -126,9 +128,9 @@ def percentile_slug(percentile):
 
 
 def compute_percentile(values, percentile):
-    if not values:
+    ordered = sorted(value for value in values if value == value)
+    if not ordered:
         return None
-    ordered = sorted(values)
     size = len(ordered)
     if size == 1:
         return ordered[0]
@@ -140,137 +142,133 @@ def compute_percentile(values, percentile):
     return ordered[lower_idx] * (1.0 - weight) + ordered[upper_idx] * weight
 
 
-def find_csv_header_index(lines):
-    for idx, raw_line in enumerate(lines):
-        stripped = raw_line.strip()
-        if not stripped:
-            continue
-        columns = [normalized_name(part) for part in stripped.split(',')]
-        if 'x_km' in columns and 'y_km' in columns and 'value' in columns:
-            return idx
-    return None
-
-
 def load_csv_dataset(csv_path):
     with csv_path.open('r', encoding='utf-8', newline='') as handle:
-        lines = handle.readlines()
+        fieldnames = None
+        for raw_line in handle:
+            if not raw_line.strip():
+                continue
+            columns = next(csv.reader([raw_line]))
+            if {'x_km', 'y_km', 'value'} <= {normalized_name(col) for col in columns}:
+                fieldnames = columns
+                break
 
-    header_index = find_csv_header_index(lines)
-    if header_index is None:
-        return None
+        if not fieldnames:
+            return
 
-    csv_content = ''.join(lines[header_index:])
-    reader = csv.DictReader(csv_content.splitlines())
-    fieldnames = reader.fieldnames or []
-    rows = [
-        row for row in reader
-        if any(cleaned_cell(row, col) for col in fieldnames)
-    ]
+        reader = csv.DictReader(handle, fieldnames=fieldnames)
+        sample_rows = []
+        while len(sample_rows) < 25:
+            row = next(reader, None)
+            if row is None:
+                break
+            if any(cleaned_cell(row, col) for col in fieldnames):
+                sample_rows.append(row)
 
-    if not fieldnames or not rows:
-        return None
+        if not sample_rows:
+            return
 
-    concentration_cols = detect_concentration_columns(fieldnames, rows[: min(25, len(rows))])
-    if not concentration_cols:
-        return None
+        concentration_cols = detect_concentration_columns(fieldnames, sample_rows)
+        if not concentration_cols:
+            return
 
-    key_cols = sort_key_columns([col for col in fieldnames if col not in concentration_cols])
-    row_map = {}
-    for row in rows:
-        key = tuple((col, row.get(col, '')) for col in key_cols)
-        concentrations = []
-        for conc_col in concentration_cols:
-            raw_value = cleaned_cell(row, conc_col)
-            if not raw_value:
-                concentrations.append(None)
-            else:
-                try:
-                    concentrations.append(float(raw_value))
-                except Exception:
-                    concentrations.append(None)
-        row_map[key] = dict(
-            meta={col: row.get(col, '') for col in key_cols},
-            values=concentrations,
-        )
+        key_cols = sort_key_columns([col for col in fieldnames if col not in concentration_cols])
+        yield dict(key_cols=key_cols, concentration_cols=concentration_cols)
 
-    return dict(
-        fieldnames=fieldnames,
-        key_cols=key_cols,
-        concentration_cols=concentration_cols,
-        row_map=row_map,
-    )
+        for row in chain(sample_rows, reader):
+            if not any(cleaned_cell(row, col) for col in fieldnames):
+                continue
+            key = tuple((col, row.get(col, '')) for col in key_cols)
+            values = []
+            for conc_col in concentration_cols:
+                raw_value = cleaned_cell(row, conc_col)
+                if not raw_value:
+                    values.append(None)
+                else:
+                    try:
+                        values.append(float(raw_value))
+                    except ValueError:
+                        values.append(None)
+            yield key, values
 
 
-def merge_period(files_for_period, percentile_values):
-    datasets = []
+def merge_period(files_for_period):
     warnings = []
     skipped = []
+    aggregate = {}
+    key_cols = None
+    concentration_cols = None
+    base_row_count = 0
+    files_used = 0
 
     for file_path in files_for_period:
-        dataset = load_csv_dataset(file_path)
+        dataset_rows = load_csv_dataset(file_path)
+        dataset = next(dataset_rows, None)
         if dataset is None:
             skipped.append(file_path.name)
             continue
-        datasets.append((file_path, dataset))
 
-    if not datasets:
-        return None, warnings, skipped
-
-    base_file, base_dataset = datasets[0]
-    concentration_cols = list(base_dataset['concentration_cols'])
-    key_cols = list(base_dataset['key_cols'])
-
-    intersection = set(base_dataset['row_map'].keys())
-    valid_datasets = [(base_file, base_dataset)]
-
-    for file_path, dataset in datasets[1:]:
-        if dataset['concentration_cols'] != concentration_cols or dataset['key_cols'] != key_cols:
+        if key_cols is not None and (
+            dataset['concentration_cols'] != concentration_cols or
+            dataset['key_cols'] != key_cols
+        ):
+            dataset_rows.close()
             skipped.append(file_path.name)
             warnings.append(f"Schema non compatibile, file ignorato: {file_path.name}")
             continue
-        intersection &= set(dataset['row_map'].keys())
-        valid_datasets.append((file_path, dataset))
 
-    if not valid_datasets:
+        if key_cols is None:
+            key_cols = dataset['key_cols']
+            concentration_cols = dataset['concentration_cols']
+
+        generation = files_used + 1
+        for key, values in dataset_rows:
+            entry = aggregate.get(key)
+            if entry is None:
+                if files_used:
+                    continue
+                entry = dict(
+                    values=[array('d') for _ in concentration_cols],
+                    seen=generation,
+                    last_generation=0,
+                )
+                aggregate[key] = entry
+            elif files_used and entry['seen'] not in (files_used, generation):
+                continue
+
+            if entry['last_generation'] != generation:
+                entry['seen'] = generation
+                entry['last_generation'] = generation
+                for series, value in zip(entry['values'], values):
+                    series.append(value if value is not None else float('nan'))
+            else:
+                for series, value in zip(entry['values'], values):
+                    series[-1] = value if value is not None else float('nan')
+
+        if files_used == 0:
+            base_row_count = len(aggregate)
+        else:
+            missing_keys = [
+                key for key, entry in aggregate.items()
+                if entry['seen'] != generation
+            ]
+            for key in missing_keys:
+                del aggregate[key]
+        files_used = generation
+
+    if not aggregate:
         return None, warnings, skipped
 
-    if len(intersection) < len(valid_datasets[0][1]['row_map']):
+    if len(aggregate) < base_row_count:
         warnings.append(
-            f"Griglia non allineata: uso intersezione righe ({len(intersection)} recettori)"
+            f"Griglia non allineata: uso intersezione righe ({len(aggregate)} recettori)"
         )
 
-    ordered_keys = [k for k in valid_datasets[0][1]['row_map'].keys() if k in intersection]
-    if not ordered_keys:
-        return None, warnings, skipped
-
-    rows_by_percentile = {pct: [] for pct in percentile_values}
-    for key in ordered_keys:
-        meta = dict(valid_datasets[0][1]['row_map'][key]['meta'])
-
-        per_concentration_values = []
-        for idx, conc_col in enumerate(concentration_cols):
-            values = []
-            for _, dataset in valid_datasets:
-                value = dataset['row_map'][key]['values'][idx]
-                if value is not None:
-                    values.append(value)
-            per_concentration_values.append(values)
-
-        for pct in percentile_values:
-            output_row = dict(meta)
-            for idx, conc_col in enumerate(concentration_cols):
-                pct_value = compute_percentile(per_concentration_values[idx], pct)
-                if pct_value is None:
-                    output_row[conc_col] = ''
-                else:
-                    output_row[conc_col] = f"{pct_value:.6f}"
-            rows_by_percentile[pct].append(output_row)
-
-    fieldnames_out = key_cols + concentration_cols
     return dict(
-        fieldnames=fieldnames_out,
-        rows_by_percentile=rows_by_percentile,
-        files_used=len(valid_datasets),
+        fieldnames=key_cols + concentration_cols,
+        receptors=aggregate,
+        concentration_cols=concentration_cols,
+        files_used=files_used,
     ), warnings, skipped
 
 
@@ -332,7 +330,7 @@ for parameter_dir in parameter_dirs:
         gran_created = 0
         for period_key in sorted(periods.keys()):
             files_for_period = periods[period_key]
-            result, period_warnings, period_skipped = merge_period(files_for_period, percentiles)
+            result, period_warnings, period_skipped = merge_period(files_for_period)
 
             if period_warnings:
                 for warning in period_warnings:
@@ -359,7 +357,14 @@ for parameter_dir in parameter_dirs:
                     writer = csv.DictWriter(out_handle, fieldnames=result['fieldnames'], lineterminator='\n')
                     writer.writeheader()
                     out_handle.write(" \n")
-                    writer.writerows(result['rows_by_percentile'][percentile])
+                    for key, entry in result['receptors'].items():
+                        output_row = dict(key)
+                        for idx, conc_col in enumerate(result['concentration_cols']):
+                            pct_value = compute_percentile(entry['values'][idx], percentile)
+                            output_row[conc_col] = (
+                                f"{pct_value:.6f}" if pct_value is not None else ''
+                            )
+                        writer.writerow(output_row)
 
                 gran_created += 1
                 summary['outputs_created'] += 1
